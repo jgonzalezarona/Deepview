@@ -25,13 +25,16 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    - name: Ejecutar Extractor de Fundamentales
+    - name: Paso 1 - Generar feed.json necesario
+      run: python build_feed.py
+
+    - name: Paso 2 - Ejecutar Extractor de Fundamentales
       run: python build_fundamentals.py
 
-    - name: Guardar fundamentals.js
+    - name: Guardar datos generados
       run: |
         git config --global user.name "DeepView Bot"
         git config --global user.email "bot@deepview.internal"
-        git add fundamentals.js
-        git commit -m "Fundamentales actualizados en background" || exit 0
+        git add feed.js feed.json fundamentals.js || true
+        git commit -m "Precios y Fundamentales consolidados en background" || exit 0
         git push
