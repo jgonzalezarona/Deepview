@@ -2,13 +2,24 @@ name: Actualizar Datos DeepView
 
 on:
   schedule:
-    # Se ejecuta automáticamente de lunes a viernes a las 22:00 UTC
-    - cron: '0 22 * * 1-5'
-  workflow_dispatch: # Permite activar la ejecución manualmente desde el móvil o web
+    # De lunes a viernes (1-5), cubriendo la actividad de múltiples mercados mundiales
+    - cron: '0 9 * * 1-5'   # 09:00 UTC - Apertura europea y pre-market general
+    - cron: '30 10 * * 1-5' # 10:30 UTC - Transcurso de la mañana europea
+    - cron: '0 12 * * 1-5'  # 12:00 UTC - Mitad de jornada europea
+    - cron: '30 13 * * 1-5' # 13:30 UTC - Pre-market de EE. UU. e inicio de tarde europea
+    - cron: '0 15 * * 1-5'  # 15:00 UTC - Apertura de mercados americanos (Wall Street)
+    - cron: '30 16 * * 1-5' # 16:30 UTC - Cierre de mercado europeo y transcurso americano
+    - cron: '0 18 * * 1-5'  # 18:00 UTC - Transcurso de la tarde americana
+    - cron: '30 19 * * 1-5' # 19:30 UTC - Tramo final de mercados americanos
+    - cron: '0 21 * * 1-5'  # 21:00 UTC - Pre-cierre americano
+    - cron: '0 22 * * 1-5'  # 22:00 UTC - Cierre definitivo y consolidación de datos del día
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
     - name: Descargar codigo del repositorio
@@ -17,7 +28,7 @@ jobs:
     - name: Configurar entorno de Python
       uses: actions/setup-python@v5
       with:
-        python-python-version: '3.10'
+        python-version: '3.10'
 
     - name: Instalar librerias de programacion
       run: |
