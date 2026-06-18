@@ -2,15 +2,14 @@ name: Actualizar Fundamentales DeepView
 
 on:
   schedule:
-    # Se ejecuta automáticamente todos los sábados a las 04:00 UTC
     - cron: '0 4 * * 6'
-  workflow_dispatch: # Permite que lo actives manualmente desde el móvil pulsando un botón
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # Permiso clave para que el bot pueda guardar el archivo fundamentals.js
+      contents: write
 
     steps:
     - name: Descargar codigo del repositorio
