@@ -2,16 +2,15 @@ name: Actualizar Fundamentales DeepView
 
 on:
   schedule:
-    # Se ejecuta automaticamente todos los sabados a las 04:00 UTC
-    # Los datos fundamentales no cambian intradia, basta con una vez por semana
+    # Se ejecuta automáticamente todos los sábados a las 04:00 UTC
     - cron: '0 4 * * 6'
-  workflow_dispatch: # Permite activarlo manualmente desde el movil cuando quieras
+  workflow_dispatch: # Permite que lo actives manualmente desde el móvil pulsando un botón
 
 jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # Permiso para guardar el archivo fundamentals.js
+      contents: write # Permiso clave para que el bot pueda guardar el archivo fundamentals.js
 
     steps:
     - name: Descargar codigo del repositorio
@@ -28,9 +27,7 @@ jobs:
         pip install -r requirements.txt
 
     - name: Ejecutar script de fundamentales
-      # NOTA: Asegurate de que el archivo en tu GitHub se llama exactamente asi,
-      # o cambia "actualizar_fundamentales.py" por el nombre real de tu script.
-      run: python actualizar_fundamentales.py
+      run: python build_fundamentals.py
 
     - name: Guardar y publicar fundamentales actualizados
       run: |
