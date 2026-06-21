@@ -297,7 +297,17 @@
   }
   .fade-in{animation:fi .18s ease-out;}
   @keyframes fi{from{opacity:0;transform:translateY(3px);}to{opacity:1;transform:none;}}
+  /* ---------- Panel TradingView ---------- */
+  .tv-wrap{margin:2px 10px 10px;}
+  .tv-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:2px 2px 6px;font-family:var(--sans);font-size:11px;color:var(--muted);}
+  .tv-head b{color:var(--gold);font-family:var(--mono);font-weight:650;}
+  .tv-pop{color:var(--muted);text-decoration:none;border:1px solid var(--line);border-radius:6px;padding:2px 9px;white-space:nowrap;}
+  .tv-pop:hover{color:var(--gold);border-color:var(--gold-dim);}
+  .tv-chart{height:460px;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--panel);}
+  .tv-load{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;color:var(--muted-2);font-family:var(--sans);font-size:12px;text-align:center;padding:18px;}
+  .tv-load a{color:var(--gold);text-decoration:none;}
 </style>
+<script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
 </head>
 <body>
 <div class="dv-wrap">
@@ -355,6 +365,7 @@
         <button class="dv-preset" data-preset="emergente">Líder emergente</button>
         <button class="dv-preset" data-preset="rezagada">Rezagada girando</button>
         <button class="dv-preset" data-preset="fund">Líder + fundamentales</button>
+        <button class="dv-preset" data-preset="mm200" title="Máx. +3% por encima de la MM200 · rentables · BPA trimestral y anual de doble dígito · 10 mejores por RS">En la MM200 + BPA</button>
         <button class="dv-preset" data-preset="darvas">Ruptura Darvas</button>
         <button class="dv-preset" data-preset="plantilla">Plantilla de tendencia</button>
         <button class="dv-preset" data-preset="maximos">Cerca de máximos</button>
@@ -623,6 +634,16 @@ function applyPreset(rows){
     case "emergente": return rows.filter(r=>{ const n=r.s.p.length; const rsBO=r.s.rsHigh.some(i=>i>=n-10); return rsBO && r.pctFromHigh<=-3 && r.rs>=70 && r.s.facts.ma50last!=null && r.px>r.s.facts.ma50last; });
     case "rezagada":  return rows.filter(r=> r.pctFromHigh<=-25 && r.pctFromLow>=8 && r.rs1m>r.rs6m && r.s.facts.ma50last!=null && r.px>r.s.facts.ma50last);
     case "fund":      return rows.filter(r=> r.f && r.f.profit && r.rs>=80 && ((r.f.epsQ!=null && r.f.epsQ>=20) || (r.f.sales!=null && r.f.sales>=15)));
+    case "mm200": {
+      const m = rows.filter(r=> r.f && r.f.profit
+        && r.f.epsQ!=null && r.f.epsQ>=10      // BPA trimestral doble dígito
+        && r.f.epsA!=null && r.f.epsA>=10      // BPA anual doble dígito
+        && r.s.facts.ma200last!=null
+        && r.px>=r.s.facts.ma200last           // por encima de la MM200
+        && r.px<=r.s.facts.ma200last*1.03);    // como máximo +3%
+      m.sort((a,b)=> b.rs - a.rs);             // 10 mejores por RS
+      return m.slice(0,10);
+    }
     case "darvas":    return rows.filter(r=> r.db && r.db.brokeUpRecently);
     case "plantilla": return rows.filter(r=>r.trendOK);
     case "maximos":   return rows.filter(r=>r.pctFromHigh>=-8);
@@ -731,6 +752,11 @@ function renderTable(){
   const rows=getRows();
   const tb=document.getElementById("tbody");tb.innerHTML="";
   document.getElementById("tbl-count").textContent=rows.length+" valores";
+  if(rows.length===0){
+    const tr=document.createElement("tr");
+    tr.innerHTML=`<td colspan="15"><div class="dv-empty">Ninguna empresa cumple este filtro ahora mismo.<br>Prueba a quitar el filtro de índice/sector, o ejecuta <b>actualizar_FUNDAMENTALES.bat</b> para ampliar la cobertura de fundamentales.</div></td>`;
+    tb.appendChild(tr);
+  }
   rows.forEach((r,i)=>{
     const tr=document.createElement("tr");
     tr.className="row"+(state.sel===(r.sym||r.t)?" sel":"");
@@ -835,6 +861,38 @@ function buildChart(r){
 }
 
 /* ---------- Detalle ---------- */
+/* ---------- TradingView ---------- */
+function tvSymbol(r){
+  const sym=(r.sym||r.t||"").toUpperCase();
+  const dot=sym.lastIndexOf(".");
+  let base=dot>0?sym.slice(0,dot):sym;
+  const suf=dot>0?sym.slice(dot+1):"";
+  const EXCH={MC:"BME",PA:"EURONEXT",AS:"EURONEXT",BR:"EURONEXT",LS:"EURONEXT",IR:"EURONEXT",
+    DE:"XETR",F:"FWB",SW:"SIX",MI:"MIL",L:"LSE",ST:"OMXSTO",CO:"OMXCOP",HE:"OMXHEX",OL:"OSL",VI:"VIE"};
+  if(!suf) return base.replace(/-/g,".");      // US: BRK-B -> BRK.B (TradingView lo resuelve)
+  const ex=EXCH[suf];
+  base=base.replace(/-/g,"_");                  // clases europeas: NOVO-B -> NOVO_B
+  return ex?ex+":"+base:base;                   // sin mapeo -> símbolo pelado (TV intenta resolver)
+}
+let _tvTries=0;
+function mountTradingView(symbol){
+  if(typeof window==="undefined" || typeof window.requestAnimationFrame!=="function") return; // entorno sin navegador
+  const host=document.getElementById("tv_chart");
+  if(!host) return;
+  if(typeof TradingView==="undefined"){
+    if(_tvTries++<25){host.innerHTML='<div class="tv-load">Cargando TradingView…</div>';setTimeout(()=>mountTradingView(symbol),300);}
+    else{host.innerHTML='<div class="tv-load">No se pudo cargar TradingView (¿sin conexión?).<br><a href="https://www.tradingview.com/chart/?symbol='+encodeURIComponent(symbol)+'" target="_blank" rel="noopener">Abrir en tradingview.com ↗</a></div>';}
+    return;
+  }
+  _tvTries=0; host.innerHTML="";
+  new TradingView.widget({
+    container_id:"tv_chart", symbol:symbol, autosize:true,
+    interval:"D", timezone:"Europe/Madrid", theme:"dark", style:"1",
+    locale:"es", hide_side_toolbar:false, allow_symbol_change:true,
+    withdateranges:true, details:false, calendar:false
+  });
+}
+
 function renderDetail(){
   const empty=document.getElementById("detail-empty");
   const body=document.getElementById("detail-body");
@@ -843,6 +901,7 @@ function renderDetail(){
   if(!r){empty.style.display="";body.style.display="none";return;}
   empty.style.display="none";body.style.display="";
   body.className="fade-in";
+  const tvSym=tvSymbol(r);
   const verdict = r.trendOK
     ? `<div class="verdict ok"><b>Plantilla de tendencia OK</b> — cumple las 6 condiciones. RS ${r.rs}.</div>`
     : `<div class="verdict no">Plantilla incompleta — ${r.trendCount}/6 condiciones. Vigilar, aún no accionable.</div>`;
@@ -857,6 +916,10 @@ function renderDetail(){
       <div class="dv-rsbig">RS Rating <span class="v" style="color:${rsColor(r.rs)}">${r.rs}</span>
         · 1M ${r.rs1m} · 3M ${r.rs3m} · 6M ${r.rs6m} · 12M ${r.rs12m}</div>
     </div>
+    <div class="tv-wrap">
+      <div class="tv-head"><span>Gráfico TradingView · <b>${tvSym}</b></span><a class="tv-pop" href="https://www.tradingview.com/chart/?symbol=${encodeURIComponent(tvSym)}" target="_blank" rel="noopener">Abrir en TradingView ↗</a></div>
+      <div id="tv_chart" class="tv-chart"></div>
+    </div>
     <div class="chart-box">${buildChart(r)}</div>
     ${darvasStrip(r)}
     <div class="dv-checklist">
@@ -865,6 +928,7 @@ function renderDetail(){
       ${verdict}
     </div>
     ${fundCard(r)}`;
+  mountTradingView(tvSym);
 }
 
 function fundCard(r){
