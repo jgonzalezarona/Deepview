@@ -366,9 +366,6 @@
         <button class="dv-preset" data-preset="rezagada">Rezagada girando</button>
         <button class="dv-preset" data-preset="fund">Líder + fundamentales</button>
         <button class="dv-preset" data-preset="mm200" title="Máx. +3% por encima de la MM200 · rentables · BPA trimestral y anual de doble dígito · 10 mejores por RS">En la MM200 + BPA</button>
-        <button class="dv-preset" data-preset="darvas">Ruptura Darvas</button>
-        <button class="dv-preset" data-preset="darvas_breakout" title="Valores en ruptura de caja Darvas">Darvas: Rupturas</button>
-        <button class="dv-preset" data-preset="darvas_inbox" title="Valores acumulando dentro de la caja">Darvas: En Caja</button>
         <button class="dv-preset" data-preset="plantilla">Plantilla de tendencia</button>
         <button class="dv-preset" data-preset="maximos">Cerca de máximos</button>
         <button class="dv-preset" data-preset="ruptura">Ruptura con volumen</button>
@@ -629,9 +626,6 @@ function applyPreset(rows){
       m.sort((a,b)=> b.rs - a.rs);
       return m.slice(0,10);
     }
-    case "darvas":          return rows.filter(r=> r.db && r.db.brokeUpRecently);
-    case "darvas_breakout": return rows.filter(r=> r.db && r.db.state === 'breakout');
-    case "darvas_inbox":    return rows.filter(r=> r.db && r.db.state === 'inbox');
     case "plantilla": return rows.filter(r=>r.trendOK);
     case "maximos":   return rows.filter(r=>r.pctFromHigh>=-8);
     case "ruptura":   return rows.filter(r=>r.rv>=1.4 && r.chg>=1.3);
@@ -999,7 +993,7 @@ slider.addEventListener("input",()=>{
 });
 document.getElementById("search").addEventListener("input",e=>{state.q=e.target.value.trim();render();});
 document.getElementById("clear-sector").addEventListener("click",()=>{state.sector=null;render();});
-document.querySelectorAll("#thead-row Th").forEach(th=>{
+document.querySelectorAll("#thead-row th").forEach(th=>{
   th.addEventListener("click",()=>{
     const k=th.dataset.k;
     if(k==="rank"){state.sortK="rs";state.sortDir=-1;}
