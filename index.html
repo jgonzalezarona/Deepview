@@ -234,7 +234,7 @@
     text-transform:uppercase;color:var(--muted-2);font-weight:600;
   }
   .legend{display:flex;gap:12px;align-items:center;flex-wrap:wrap;}
-  .legend span{display:inline-flex;align-items:center;gap:5px;color:var(--muted);text-transform:none;letter-spacing:0;font-size:11px;font-weight:500;}
+  .legend span{display:inline-flex;align-items:center;gap:5px;color:var(--muted);text-transform:none;letter-spacing:0;font-size:11px;font-weight:550;}
   .legend i{width:14px;height:2px;border-radius:2px;display:inline-block;}
   .legend i.dash{height:0;border-top:2px dashed var(--muted);width:14px;}
 
@@ -312,7 +312,6 @@
 <body>
 <div class="dv-wrap">
 
-  <!-- HEADER -->
   <div class="dv-top">
     <div class="dv-brand">
       <div class="dv-mark" aria-hidden="true">
@@ -337,7 +336,6 @@
     </div>
   </div>
 
-  <!-- CONTROLS -->
   <div class="dv-controls">
     <div class="dv-group">
       <span class="lbl">Índice</span>
@@ -367,12 +365,12 @@
         <button class="dv-preset" data-preset="fund">Líder + fundamentales</button>
         <button class="dv-preset" data-preset="mm200" title="Máx. +3% por encima de la MM200 · rentables · BPA trimestral y anual de doble dígito · 10 mejores por RS">En la MM200 + BPA</button>
         <button class="dv-preset" data-preset="darvas">Ruptura Darvas</button>
+        <button class="dv-preset" data-preset="darvas_breakout" title="Valores en ruptura de caja Darvas">Darvas: Rupturas</button>
+        <button class="dv-preset" data-preset="darvas_inbox" title="Valores acumulando dentro de la caja">Darvas: En Caja</button>
         <button class="dv-preset" data-preset="plantilla">Plantilla de tendencia</button>
         <button class="dv-preset" data-preset="maximos">Cerca de máximos</button>
         <button class="dv-preset" data-preset="ruptura">Ruptura con volumen</button>
         <button class="dv-preset" data-preset="verde">Verde en día rojo</button>
-	<button class="dv-preset" data-preset="darvas_breakout" title="Valores en ruptura de caja Darvas">Darvas: Rupturas</button>
-	<button class="dv-preset" data-preset="darvas_inbox" title="Valores acumulando dentro de la caja">Darvas: En Caja</button>
       </div>
     </div>
 
@@ -382,12 +380,9 @@
     </div>
   </div>
 
-  <!-- MAPA SECTOR x INDICE -->
   <div id="heatmap" class="dv-hm-host"></div>
 
-  <!-- MAIN -->
   <div class="dv-main">
-    <!-- RANKING -->
     <div class="dv-card">
       <div class="dv-card-h">
         <span class="t">Ranking por fuerza relativa</span>
@@ -401,6 +396,7 @@
               <th class="l" data-k="rank">#</th>
               <th class="l" data-k="t">Valor</th>
               <th class="c" data-k="idx">Índice</th>
+              <th class="c" data-k="dbRank">Caja</th>
               <th data-k="px">Precio</th>
               <th data-k="chg">%D</th>
               <th data-k="rs">RS</th>
@@ -412,7 +408,6 @@
               <th data-k="rv">Vol rel</th>
               <th data-k="fEpsQ">BPA Δt</th>
               <th data-k="fPe">PER</th>
-              <th class="c" data-k="dbRank">Caja</th>
             </tr>
           </thead>
           <tbody id="tbody"></tbody>
@@ -420,7 +415,6 @@
       </div>
     </div>
 
-    <!-- DETAIL -->
     <div class="dv-card" id="detail-card">
       <div class="dv-empty" id="detail-empty">Selecciona un valor del ranking para ver su gráfico de precio, su línea de fuerza relativa y la plantilla de tendencia.</div>
       <div id="detail-body" style="display:none;"></div>
@@ -433,33 +427,23 @@
   </div>
 </div>
 
-<!-- Carga opcional del feed real generado por build_feed.py (mismo directorio).
-     Si no existe, el dashboard usa los datos demo embebidos. -->
 <script src="feed.js" onerror="window.__noFeed=true"></script>
 <script src="fundamentals.js" onerror="window.__noFund=true"></script>
 <script>
 "use strict";
 
-/* =========================================================
-   DATOS BASE (demo). Esquema = el que emitirá el pipeline:
-   { generatedAt, benchmark, rows:[{t,n,idx,sec,rs,px,chg,rv}, ...] }
-   El pipeline en local (yfinance/EODHD) rellenará 'rows' con
-   datos reales y el resto se deriva en cliente igual que aquí.
-   ========================================================= */
 const DEMO_FEED = {
   generatedAt: "2026-06-12",
   benchmark: "ACWI (MSCI All-Country)",
   rows: [
-    // --- IBEX 35 ---
-    {t:"ITX",  n:"Inditex",            idx:"IBEX",  sec:"Consumo discr.",  rs:83, px:52.10,  chg:0.9,  rv:1.1},
-    {t:"IBE",  n:"Iberdrola",          idx:"IBEX",  sec:"Utilities",       rs:71, px:16.42,  chg:-0.3, rv:0.9},
+    {t:"ITX",  n:"Inditex",           idx:"IBEX",  sec:"Consumo discr.",  rs:83, px:52.10,  chg:0.9,  rv:1.1},
+    {t:"IBE",  n:"Iberdrola",         idx:"IBEX",  sec:"Utilities",       rs:71, px:16.42,  chg:-0.3, rv:0.9},
     {t:"SAN",  n:"Banco Santander",    idx:"IBEX",  sec:"Financiero",      rs:80, px:7.84,   chg:1.4,  rv:1.3},
     {t:"BBVA", n:"BBVA",               idx:"IBEX",  sec:"Financiero",      rs:86, px:14.22,  chg:0.7,  rv:1.2},
     {t:"AMS",  n:"Amadeus IT",         idx:"IBEX",  sec:"Tecnología",      rs:68, px:78.30,  chg:-0.6, rv:0.8},
     {t:"AENA", n:"Aena",               idx:"IBEX",  sec:"Industrial",      rs:77, px:235.40, chg:0.4,  rv:0.9},
     {t:"FER",  n:"Ferrovial",          idx:"IBEX",  sec:"Industrial",      rs:82, px:47.05,  chg:0.5,  rv:1.0},
     {t:"CLNX", n:"Cellnex",            idx:"IBEX",  sec:"Comunicaciones",  rs:49, px:38.10,  chg:-1.1, rv:1.1},
-    // --- S&P 500 (US large) ---
     {t:"NVDA", n:"NVIDIA",             idx:"SP500", sec:"Tecnología",      rs:97, px:178.20, chg:2.3,  rv:1.8},
     {t:"AAPL", n:"Apple",              idx:"SP500", sec:"Tecnología",      rs:74, px:228.40, chg:-0.4, rv:0.9},
     {t:"MSFT", n:"Microsoft",          idx:"SP500", sec:"Tecnología",      rs:84, px:498.10, chg:0.6,  rv:1.0},
@@ -472,7 +456,6 @@ const DEMO_FEED = {
     {t:"XOM",  n:"Exxon Mobil",        idx:"SP500", sec:"Energía",         rs:55, px:118.30, chg:-0.8, rv:1.1},
     {t:"V",    n:"Visa",               idx:"SP500", sec:"Financiero",      rs:78, px:372.10, chg:0.2,  rv:0.8},
     {t:"GE",   n:"GE Aerospace",       idx:"SP500", sec:"Industrial",      rs:89, px:268.50, chg:1.4,  rv:1.4},
-    // --- Nasdaq (growth) ---
     {t:"PLTR", n:"Palantir",           idx:"NDX",   sec:"Tecnología",      rs:95, px:165.40, chg:3.1,  rv:2.3},
     {t:"AMD",  n:"AMD",                idx:"NDX",   sec:"Tecnología",      rs:70, px:168.20, chg:-1.2, rv:1.2},
     {t:"TSLA", n:"Tesla",              idx:"NDX",   sec:"Consumo discr.",  rs:63, px:348.10, chg:-2.1, rv:1.6},
@@ -481,7 +464,6 @@ const DEMO_FEED = {
     {t:"CRWD", n:"CrowdStrike",        idx:"NDX",   sec:"Tecnología",      rs:89, px:510.20, chg:1.6,  rv:1.4},
     {t:"MU",   n:"Micron",             idx:"NDX",   sec:"Tecnología",      rs:66, px:118.10, chg:-0.9, rv:1.3},
     {t:"ANET", n:"Arista Networks",    idx:"NDX",   sec:"Tecnología",      rs:90, px:122.40, chg:1.5,  rv:1.3},
-    // --- Europa (Euronext/Xetra/SIX) ---
     {t:"ASML", n:"ASML Holding",       idx:"EU",    sec:"Tecnología",      rs:81, px:1020.30,chg:0.8,  rv:1.0},
     {t:"SAP",  n:"SAP",                idx:"EU",    sec:"Tecnología",      rs:92, px:268.40, chg:1.3,  rv:1.2},
     {t:"MC",   n:"LVMH",               idx:"EU",    sec:"Consumo discr.",  rs:58, px:615.20, chg:-0.7, rv:0.9},
@@ -493,25 +475,22 @@ const DEMO_FEED = {
   ]
 };
 
-/* ---------- Origen de datos: feed.js (real) o demo embebido ---------- */
 const LIVE = !!(window.DEEPVIEW_FEED && window.DEEPVIEW_FEED.rows && window.DEEPVIEW_FEED.rows.length);
 const FEED = LIVE ? window.DEEPVIEW_FEED : DEMO_FEED;
 const BENCH = FEED.benchmarkPrices || null;
 
 const IDX_LABEL = {IBEX:"IBEX", SP500:"S&P 500", NDX:"Nasdaq", EU:"Europa"};
 
-/* ---------- RNG determinista por ticker ---------- */
 function hashStr(s){let h=1779033703^s.length;for(let i=0;i<s.length;i++){h=Math.imul(h^s.charCodeAt(i),3432918353);h=(h<<13)|(h>>>19);}return h>>>0;}
 function mulberry32(a){return function(){a|=0;a=(a+0x6D2B79F5)|0;let t=Math.imul(a^(a>>>15),1|a);t=(t+Math.imul(t^(t>>>7),61|t))^t;return((t^(t>>>14))>>>0)/4294967296;};}
 
-/* ---------- Núcleo de series (común a datos reales y demo) ---------- */
-const WIN = 180;          // ventana visible
+const WIN = 180;
 function sma(arr,w){
   const out=new Array(arr.length).fill(null);let sum=0;
   for(let i=0;i<arr.length;i++){sum+=arr[i];if(i>=w)sum-=arr[i-w];if(i>=w-1)out[i]=sum/w;}
   return out;
 }
-// De una serie de precios (+ benchmark) -> arrays recortados a la ventana + hechos escalares
+
 function computeFromPrices(p,b){
   const M=p.length, win=Math.min(WIN,M-1), i0=M-win;
   const ma50=sma(p,50), ma200=sma(p,200);
@@ -536,7 +515,7 @@ function computeFromPrices(p,b){
   };
   return {p:pw, ma50:ma50w, ma200:ma200w, rs:rslw, rsMa:rsMaw, rsHigh, support, resistance, facts};
 }
-// Demo: sintetiza precios desde el RS y reutiliza computeFromPrices
+
 const N_DEMO=280;
 function synthSeries(row){
   const rnd=mulberry32(hashStr(row.t));
@@ -548,18 +527,17 @@ function synthSeries(row){
   return computeFromPrices(p,b);
 }
 
-/* ---------- Enriquecer filas (real: lo que trae el feed; demo: sintetizado) ---------- */
 function demoEnrich(r){
   const s=synthSeries(r), f=s.facts;
   const c1=r.px>f.ma50last, c2=f.ma50last>f.ma200last, c3=f.ma200Rising,
         c4=f.pctFromHigh>=-25, c5=f.pctFromLow>=30, c6=r.rs>=70;
   const crit=[
-    {ok:c1, tx:"Precio sobre la MA50",            vx:fmt(r.px)+" / "+fmt(f.ma50last)},
-    {ok:c2, tx:"MA50 sobre MA200",                vx:fmt(f.ma50last)+" / "+fmt(f.ma200last)},
+    {ok:c1, tx:"Precio sobre la MA50",           vx:fmt(r.px)+" / "+fmt(f.ma50last)},
+    {ok:c2, tx:"MA50 sobre MA200",               vx:fmt(f.ma50last)+" / "+fmt(f.ma200last)},
     {ok:c3, tx:"MA200 inclinada al alza",         vx:c3?"sí":"no"},
     {ok:c4, tx:"A < 25% del máximo de 52s",       vx:f.pctFromHigh.toFixed(1)+"%"},
     {ok:c5, tx:"A > 30% del mínimo de 52s",       vx:"+"+f.pctFromLow.toFixed(0)+"%"},
-    {ok:c6, tx:"RS Rating ≥ 70",                  vx:String(r.rs)}
+    {ok:c6, tx:"RS Rating ≥ 70",                   vx:String(r.rs)}
   ];
   const cnt=crit.filter(x=>x.ok).length;
   const d=mulberry32(hashStr(r.t+"h")), jit=()=>Math.round((d()*16)-8), clamp=v=>Math.max(1,Math.min(99,v));
@@ -569,6 +547,7 @@ function demoEnrich(r){
     rs6m:clamp(r.rs+Math.round(jit()/3)), rs12m:r.rs, pctFromHigh:f.pctFromHigh
   });
 }
+
 function darvasBox(p){
   const n=p.length, k=3, start=Math.max(0,n-150);
   let phase='seekTop';
@@ -595,6 +574,7 @@ function darvasBox(p){
   const rank=state==='breakout'?3:state==='inbox'?2:state==='breakdown'?1:0;
   return {top,bottom,topIdx,botIdx,state,rank,stop:bottom,brokeUpRecently};
 }
+
 const FUND = (window.DEEPVIEW_FUND && window.DEEPVIEW_FUND.rows) ? window.DEEPVIEW_FUND.rows : null;
 function attachFund(row){
   const f = (FUND && row.sym) ? (FUND[row.sym]||null) : null;
@@ -603,6 +583,7 @@ function attachFund(row){
   row.fPe = f ? f.pe : null;
   return row;
 }
+
 const DATA = FEED.rows.map(r=>{
   const base = LIVE ? Object.assign({}, r, { s: computeFromPrices(r.prices, BENCH) }) : demoEnrich(r);
   attachFund(base);
@@ -611,13 +592,10 @@ const DATA = FEED.rows.map(r=>{
   return base;
 });
 
-/* ---------- Estado ---------- */
 let state={idx:"ALL", sector:null, rsMin:0, preset:"todos", q:"", sortK:"rs", sortDir:-1, sel:null};
 
-/* ---------- Helpers ---------- */
 function fmt(v){if(v==null)return "—";return v>=1000?v.toLocaleString("es-ES",{maximumFractionDigits:0}):v.toFixed(2);}
 function rsRGB(rs){
-  // diverging: slate -> ámbar -> verde (frío=débil, cálido/verde=fuerte)
   const stops=[[0,[77,91,107]],[40,[123,124,118]],[70,[200,162,58]],[90,[47,191,113]],[99,[56,224,138]]];
   let a=stops[0],b=stops[stops.length-1];
   for(let i=0;i<stops.length-1;i++){if(rs>=stops[i][0]&&rs<=stops[i+1][0]){a=stops[i];b=stops[i+1];break;}}
@@ -628,7 +606,6 @@ function rsColor(rs){const c=rsRGB(rs);return `rgb(${c[0]},${c[1]},${c[2]})`;}
 function chgClass(v){return v>0.001?"pos":v<-0.001?"neg":"dim";}
 function chgStr(v){return (v>0?"+":"")+v.toFixed(1)+"%";}
 
-/* ---------- Filtro + orden ---------- */
 function applyPreset(rows){
   switch(state.preset){
     case "lideres":   return rows.filter(r=>r.rs>=90 && r.trendOK);
@@ -638,24 +615,25 @@ function applyPreset(rows){
     case "fund":      return rows.filter(r=> r.f && r.f.profit && r.rs>=80 && ((r.f.epsQ!=null && r.f.epsQ>=20) || (r.f.sales!=null && r.f.sales>=15)));
     case "mm200": {
       const m = rows.filter(r=> r.f && r.f.profit
-        && r.f.epsQ!=null && r.f.epsQ>=10      // BPA trimestral doble dígito
-        && r.f.epsA!=null && r.f.epsA>=10      // BPA anual doble dígito
+        && r.f.epsQ!=null && r.f.epsQ>=10
+        && r.f.epsA!=null && r.f.epsA>=10
         && r.s.facts.ma200last!=null
-        && r.px>=r.s.facts.ma200last           // por encima de la MM200
-        && r.px<=r.s.facts.ma200last*1.03);    // como máximo +3%
-      m.sort((a,b)=> b.rs - a.rs);             // 10 mejores por RS
+        && r.px>=r.s.facts.ma200last
+        && r.px<=r.s.facts.ma200last*1.03);
+      m.sort((a,b)=> b.rs - a.rs);
       return m.slice(0,10);
     }
-    case "darvas":    return rows.filter(r=> r.db && r.db.brokeUpRecently);
+    case "darvas":          return rows.filter(r=> r.db && r.db.brokeUpRecently);
+    case "darvas_breakout": return rows.filter(r=> r.db && r.db.state === 'breakout');
+    case "darvas_inbox":    return rows.filter(r=> r.db && r.db.state === 'inbox');
     case "plantilla": return rows.filter(r=>r.trendOK);
     case "maximos":   return rows.filter(r=>r.pctFromHigh>=-8);
     case "ruptura":   return rows.filter(r=>r.rv>=1.4 && r.chg>=1.3);
     case "verde":     return rows.filter(r=>r.chg>0);
-case "darvas_breakout": return rows.filter(r => r.db && r.db.state === 'breakout');
-case "darvas_inbox":    return rows.filter(r => r.db && r.db.state === 'inbox');
     default:          return rows;
   }
 }
+
 function getRows(){
   let rows=DATA.slice();
   if(state.idx!=="ALL") rows=rows.filter(r=>r.idx===state.idx);
@@ -676,7 +654,6 @@ function getRows(){
   return rows;
 }
 
-/* ---------- Render: métricas + leadership ---------- */
 function renderMeta(){
   document.getElementById("m-total").textContent=DATA.length;
   document.getElementById("m-lead").textContent=DATA.filter(r=>r.rs>=80).length;
@@ -695,11 +672,13 @@ function renderMeta(){
     else mf.style.display="none";
   }
 }
+
 function cellStyle(rs){
   if(rs==null) return "background:var(--line-soft);color:var(--muted-2)";
   const c=rsRGB(rs), lum=0.2126*c[0]+0.7152*c[1]+0.0722*c[2];
   return `background:rgb(${c[0]},${c[1]},${c[2]});color:${lum>140?'#0d1117':'#eef3f8'}`;
 }
+
 function renderHeatmap(){
   const indices=["IBEX","SP500","NDX","EU"];
   const avg=arr=>arr.length?Math.round(arr.reduce((a,b)=>a+b.rs,0)/arr.length):null;
@@ -746,12 +725,12 @@ function renderHeatmap(){
   });
 }
 
-/* ---------- Render tabla ---------- */
 function pipsHTML(r){
   let h='<span class="pips">';
   r.crit.forEach(c=>{h+=`<span class="pip ${c.ok?'on':''}"></span>`;});
   h+='</span>';return h;
 }
+
 function renderTable(){
   const rows=getRows();
   const tb=document.getElementById("tbody");tb.innerHTML="";
@@ -769,6 +748,7 @@ function renderTable(){
       <td class="l"><span class="rk">${i+1}</span></td>
       <td class="l"><span class="tk">${r.t}</span><span class="nm">${r.n}</span></td>
       <td class="c"><span class="idxtag">${IDX_LABEL[r.idx]}</span></td>
+      <td class="c">${darvasGlyph(r.db)}</td>
       <td>${fmt(r.px)}</td>
       <td class="${chgClass(r.chg)}">${chgStr(r.chg)}</td>
       <td><div class="rs-cell"><span class="rs-num" style="color:${rsColor(r.rs)}">${r.rs}</span><span class="rs-track"><i style="width:${r.rs}%;background:${rsColor(r.rs)}"></i></span></div></td>
@@ -779,13 +759,11 @@ function renderTable(){
       <td class="${r.pctFromHigh>=-8?'pos':'dim'}">${r.pctFromHigh.toFixed(1)}%</td>
       <td class="${r.rv>=1.4?'pos':'dim'}">${r.rv.toFixed(1)}×</td>
       <td class="${r.fEpsQ==null?'dim':(r.fEpsQ>0?'pos':'neg')}">${r.fEpsQ==null?'—':(r.fEpsQ>0?'+':'')+r.fEpsQ.toFixed(0)+'%'}</td>
-      <td class="dim">${r.fPe==null?'—':r.fPe.toFixed(1)}</td>
-      <td class="c">${darvasGlyph(r.db)}</td>`;
+      <td class="dim">${r.fPe==null?'—':r.fPe.toFixed(1)}</td>`;
     tr.addEventListener("click",()=>select(r.sym||r.t));
     tr.addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();select(r.sym||r.t);}});
     tb.appendChild(tr);
   });
-  // marcar cabecera ordenada
   document.querySelectorAll("#thead-row th").forEach(th=>{
     const k=th.dataset.k;
     th.innerHTML=th.innerHTML.replace(/\s*[▲▼]$/,"");
@@ -795,7 +773,6 @@ function renderTable(){
   });
 }
 
-/* ---------- Gráfico SVG ---------- */
 function path(pts){return pts.map((p,i)=>(i?"L":"M")+p[0].toFixed(1)+" "+p[1].toFixed(1)).join(" ");}
 function buildChart(r){
   const s=r.s;
@@ -808,7 +785,6 @@ function buildChart(r){
   const yy=v=>PT+(1-(v-lo)/(hi-lo))*(H-PT-PB);
   const toPts=arr=>arr.map((v,i)=>v==null?null:[xx(i),yy(v)]).filter(Boolean);
   const lastX=xx(n-1), lastP=price[n-1];
-  // panel RS
   const RH=92;const rsv=s.rs, rsma=s.rsMa;
   let rlo=Math.min(...rsv), rhi=Math.max(...rsv);const rp=(rhi-rlo)*0.10||0.01;rlo-=rp;rhi+=rp;
   const ry=v=>8+(1-(v-rlo)/(rhi-rlo))*(RH-22);
@@ -828,7 +804,6 @@ function buildChart(r){
     <line x1="${x0.toFixed(1)}" y1="${yT.toFixed(1)}" x2="${x1.toFixed(1)}" y2="${yT.toFixed(1)}" stroke="${dbCol}" stroke-width="1.2" stroke-dasharray="5 3" opacity="0.9"/>
     <line x1="${x0.toFixed(1)}" y1="${yB.toFixed(1)}" x2="${x1.toFixed(1)}" y2="${yB.toFixed(1)}" stroke="${dbCol}" stroke-width="1.2" stroke-dasharray="5 3" opacity="0.9"/>`;
   }
-  // Bloque de lectura arriba-izquierda: precio + techo/suelo, alineado y sin amontonarse a la derecha
   const hasBox = !!(db && db.top!=null);
   const lblX = PL+3;
   let corner = `<rect x="${PL}" y="${(PT-3).toFixed(1)}" width="96" height="${hasBox?40:16}" rx="3" fill="#0E141B" fill-opacity="0.62"/>`
@@ -864,8 +839,6 @@ function buildChart(r){
   </svg>`;
 }
 
-/* ---------- Detalle ---------- */
-/* ---------- TradingView ---------- */
 function tvSymbol(r){
   const sym=(r.sym||r.t||"").toUpperCase();
   const dot=sym.lastIndexOf(".");
@@ -873,22 +846,22 @@ function tvSymbol(r){
   const suf=dot>0?sym.slice(dot+1):"";
   const EXCH={MC:"BME",PA:"EURONEXT",AS:"EURONEXT",BR:"EURONEXT",LS:"EURONEXT",IR:"EURONEXT",
     DE:"XETR",F:"FWB",SW:"SIX",MI:"MIL",L:"LSE",ST:"OMXSTO",CO:"OMXCOP",HE:"OMXHEX",OL:"OSL",VI:"VIE"};
-  if(!suf) return base.replace(/-/g,".");      // US: BRK-B -> BRK.B (TradingView lo resuelve)
+  if(!suf) return base.replace(/-/g,".");
   const ex=EXCH[suf];
-  base=base.replace(/-/g,"_");                  // clases europeas: NOVO-B -> NOVO_B
-  return ex?ex+":"+base:base;                   // sin mapeo -> símbolo pelado (TV intenta resolver)
+  base=base.replace(/-/g,"_");
+  return ex?ex+":"+base:base;
 }
+
 let _tvTries=0;
-let _currentWidget = null; // Almacena el widget activo para liberar memoria
+let _currentWidget = null;
 
 function mountTradingView(symbol){
-  if(typeof window==="undefined" || typeof window.requestAnimationFrame!=="function") return; 
+  if(typeof window==="undefined" || typeof window.requestAnimationFrame!=="function") return;
   const host=document.getElementById("tv_chart");
   if(!host) return;
   
-  // Si ya existía un widget anterior, lo destruimos formalmente antes de vaciar el HTML
   if (_currentWidget && typeof _currentWidget.remove === 'function') {
-    try { _currentWidget.remove(); } catch(e) { console.log(e); }
+    try { _currentWidget.remove(); } catch(e) { console.error(e); }
   }
 
   if(typeof TradingView==="undefined"){
@@ -898,14 +871,16 @@ function mountTradingView(symbol){
   }
   _tvTries=0; host.innerHTML="";
   
-  // Guardamos la nueva instancia en nuestra variable global
   _currentWidget = new TradingView.widget({
     container_id:"tv_chart", symbol:symbol, autosize:true,
     interval:"D", timezone:"Europe/Madrid", theme:"dark", style:"1",
     locale:"es", hide_side_toolbar:false, allow_symbol_change:true,
-    withdateranges:true, details:false, calendar:false
+    withdateranges:true, details:false, calendar:false,
+    disabled_features: ["use_localstorage_for_settings_saver"],
+    enabled_features: ["side_toolbar_in_fullscreen_mode"]
   });
 }
+
 function renderDetail(){
   const empty=document.getElementById("detail-empty");
   const body=document.getElementById("detail-body");
@@ -914,7 +889,7 @@ function renderDetail(){
   if(!r){empty.style.display="";body.style.display="none";return;}
   empty.style.display="none";body.style.display="";
   body.className="fade-in";
-  const tvSym=tvSymbol(r);
+  const dsym=tvSymbol(r);
   const verdict = r.trendOK
     ? `<div class="verdict ok"><b>Plantilla de tendencia OK</b> — cumple las 6 condiciones. RS ${r.rs}.</div>`
     : `<div class="verdict no">Plantilla incompleta — ${r.trendCount}/6 condiciones. Vigilar, aún no accionable.</div>`;
@@ -930,7 +905,7 @@ function renderDetail(){
         · 1M ${r.rs1m} · 3M ${r.rs3m} · 6M ${r.rs6m} · 12M ${r.rs12m}</div>
     </div>
     <div class="tv-wrap">
-      <div class="tv-head"><span>Gráfico TradingView · <b>${tvSym}</b></span><a class="tv-pop" href="https://www.tradingview.com/chart/?symbol=${encodeURIComponent(tvSym)}" target="_blank" rel="noopener">Abrir en TradingView ↗</a></div>
+      <div class="tv-head"><span>Gráfico TradingView · <b>${dsym}</b></span><a class="tv-pop" href="https://www.tradingview.com/chart/?symbol=${encodeURIComponent(dsym)}" target="_blank" rel="noopener">Abrir en TradingView ↗</a></div>
       <div id="tv_chart" class="tv-chart"></div>
     </div>
     <div class="chart-box">${buildChart(r)}</div>
@@ -941,7 +916,7 @@ function renderDetail(){
       ${verdict}
     </div>
     ${fundCard(r)}`;
-  mountTradingView(tvSym);
+  mountTradingView(dsym);
 }
 
 function fundCard(r){
@@ -969,7 +944,7 @@ function fundCard(r){
 
 function darvasStrip(r){
   const d=r.db;
-  if(!d || d.top==null) return `<div class="dv-darvas none"><span class="dl">Caja Darvas</span><span>sin caja definida (rango poco claro)</span></div>`;
+  if(!d || d.top==null) return `<div class="dv-fund"><div class="clh">Caja Darvas</div><div class="fund-empty">Sin caja definida (rango poco claro)</div></div>`;
   const lbl = d.state==='breakout'?'<b class="up">Ruptura alcista</b>' : d.state==='breakdown'?'<b class="dn">Bajo el suelo</b>' : '<b class="in">En caja</b>';
   return `<div class="dv-darvas ${d.state}">
     <span class="dl">Caja Darvas</span>
@@ -987,7 +962,6 @@ function darvasGlyph(d){
 
 function select(key){state.sel=key;renderTable();renderDetail();}
 
-/* ---------- Render global ---------- */
 function syncUI(){
   document.querySelectorAll("#seg-idx button").forEach(b=>b.classList.toggle("on", b.dataset.idx===state.idx));
   const cs=document.getElementById("clear-sector");
@@ -998,7 +972,6 @@ function syncUI(){
 }
 function render(){renderHeatmap();renderTable();renderDetail();syncUI();}
 
-/* ---------- Eventos ---------- */
 document.getElementById("seg-idx").addEventListener("click",e=>{
   const b=e.target.closest("button");if(!b)return;
   state.idx=b.dataset.idx;
@@ -1029,7 +1002,6 @@ document.querySelectorAll("#thead-row th").forEach(th=>{
   });
 });
 
-/* ---------- Init ---------- */
 renderMeta();render();
 </script>
 </body>
