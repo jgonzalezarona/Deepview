@@ -82,7 +82,7 @@
   }
   .dv-group{display:flex;align-items:center;gap:7px;}
   .dv-group > .lbl{
-    font-size:10.5px;letter-spacing:0.6px;text-transform:uppercase;
+    font-size:10.5px;letter-spacing:0.5px;text-transform:uppercase;
     color:var(--muted-2);font-weight:600;
   }
   .dv-seg{display:flex;background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden;}
@@ -312,6 +312,7 @@
 <body>
 <div class="dv-wrap">
 
+  <!-- HEADER -->
   <div class="dv-top">
     <div class="dv-brand">
       <div class="dv-mark" aria-hidden="true">
@@ -336,6 +337,7 @@
     </div>
   </div>
 
+  <!-- CONTROLS -->
   <div class="dv-controls">
     <div class="dv-group">
       <span class="lbl">Índice</span>
@@ -380,9 +382,12 @@
     </div>
   </div>
 
+  <!-- MAPA SECTOR x INDICE -->
   <div id="heatmap" class="dv-hm-host"></div>
 
+  <!-- MAIN -->
   <div class="dv-main">
+    <!-- RANKING -->
     <div class="dv-card">
       <div class="dv-card-h">
         <span class="t">Ranking por fuerza relativa</span>
@@ -415,6 +420,7 @@
       </div>
     </div>
 
+    <!-- DETAIL -->
     <div class="dv-card" id="detail-card">
       <div class="dv-empty" id="detail-empty">Selecciona un valor del ranking para ver su gráfico de precio, su línea de fuerza relativa y la plantilla de tendencia.</div>
       <div id="detail-body" style="display:none;"></div>
@@ -953,11 +959,12 @@ function darvasStrip(r){
     <span class="stop">stop sug. <b>${fmt(d.stop)}</b></span>
   </div>`;
 }
+
 function darvasGlyph(d){
   if(!d || d.top==null) return '<span class="dim">–</span>';
   if(d.state==='breakout') return '<span class="pos" title="Ruptura alcista">▲</span>';
   if(d.state==='breakdown') return '<span class="neg" title="Bajo el suelo">▼</span>';
-  return '<span class="dim" title="En caja">▭</span>';
+  return '<span class="pos" title="En caja">▭</span>';
 }
 
 function select(key){state.sel=key;renderTable();renderDetail();}
@@ -992,7 +999,7 @@ slider.addEventListener("input",()=>{
 });
 document.getElementById("search").addEventListener("input",e=>{state.q=e.target.value.trim();render();});
 document.getElementById("clear-sector").addEventListener("click",()=>{state.sector=null;render();});
-document.querySelectorAll("#thead-row th").forEach(th=>{
+document.querySelectorAll("#thead-row Th").forEach(th=>{
   th.addEventListener("click",()=>{
     const k=th.dataset.k;
     if(k==="rank"){state.sortK="rs";state.sortDir=-1;}
