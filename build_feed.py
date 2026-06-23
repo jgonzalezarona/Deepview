@@ -2,7 +2,7 @@
 """
 DeepView · Acciones — pipeline de datos (Yahoo Finance)
 =======================================================
-Versión optimizada v3.6 (Multi-index, cierres seguros, protección de volumen y marcas duales de actualización)
+Versión optimizada v3.8 (Multi-index, cierres seguros, protección de volumen y redondeo a ventana programada local)
 """
 
 import argparse, json, sys, time, math
@@ -333,11 +333,11 @@ def write(rows, bench_out, path_js, path_json):
             min_diff = diff
             ventana_elegida = v
 
+    # Guardamos la marca temporal exacta con espacio (ej: "2026-06-23 21:30")
     timestamp_oficial = f"{ahora.strftime('%Y-%m-%d')} {ventana_elegida}"
 
     feed = {
-        "generatedAt": ahora.strftime('%Y-%m-%d'), # Dejamos la propiedad original intacta por si la usa otra función nativa
-        "customDateString": timestamp_oficial,      # NUEVO CAMPO: Contiene el String explícito con la hora oficial ("2026-06-23 21:30")
+        "generatedAt": timestamp_oficial,
         "benchmark": BENCHMARK["label"],
         "benchmarkPrices": bench_out,
         "universeSize": len(rows),
