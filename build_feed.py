@@ -2,7 +2,7 @@
 """
 DeepView · Acciones — pipeline de datos (Yahoo Finance)
 =======================================================
-Versión optimizada v3.2 (Multi-index, cierres seguros y protección de volumen/nulos)
+Versión optimizada v3.3 (Multi-index, cierres seguros, protección de volumen y marcas de tiempo completas)
 """
 
 import argparse, json, sys, time, math
@@ -270,7 +270,7 @@ def compute(closes, vols, universe):
         hi, lo = float(win.max()), float(win.min())
         pfh, pfl = (last / hi - 1) * 100, (last / lo - 1) * 100
         
-        # Corrección preventiva: Relleno seguro de volumen para evitar divisiones o nulos
+        # Volumen robustecido frente a ceros y nulos dinámicos
         v = vols.get(c, pd.Series(dtype=float)).reindex(common, fill_value=0).fillna(1.0)
         v_mean = v.iloc[-50:].mean()
         
@@ -308,15 +308,19 @@ def compute(closes, vols, universe):
             "rv": round(rv, 2) if not (math.isnan(rv) or math.isinf(rv)) else 1.0,
             "pctFromHigh": round(pfh, 2), "pctFromLow": round(pfl, 2),
             "trendCount": cnt, "trendOK": cnt == 6, "crit": crit,
-            # Corrección preventiva: dropna() antes del tolist() para limpiar residuos de fechas vacías
+            # Limpieza de nulos residuales de calendarios dispares
             "prices": [round(float(x), 4) for x in pser.iloc[-OUT_POINTS:].dropna().tolist()],
         })
     rows.sort(key=lambda r: r["rs"], reverse=True)
     return rows, bench_out
 
 def write(rows, bench_out, path_js, path_json):
+    # NUEVO: Sincronización completa con fecha y hora (Formato: YYYY-MM-DD HH:MM)
+    ahora = dt.datetime.now()
+    timestamp_completo = ahora.strftime("%Y-%m-%d %H:%M")
+
     feed = {
-        "generatedAt": dt.date.today().isoformat(),
+        "generatedAt": timestamp_completo,
         "benchmark": BENCHMARK["label"],
         "benchmarkPrices": bench_out,
         "universeSize": len(rows),
