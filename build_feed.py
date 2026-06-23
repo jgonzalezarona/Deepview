@@ -2,7 +2,7 @@
 """
 DeepView · Acciones — pipeline de datos (Yahoo Finance)
 =======================================================
-Versión optimizada v3.1 (Corrección de Multi-index y cierres seguros)
+Versión optimizada v3.2 (Multi-index, cierres seguros y protección de volumen/nulos)
 """
 
 import argparse, json, sys, time, math
@@ -181,7 +181,6 @@ def download(symbols):
         df = None
         for attempt in range(3):
             try:
-                # Quitamos auto_adjust=True para evitar cierres vacíos en mercados EU e Índices
                 df = yf.download(chunk, period="2y", interval="1d", 
                                  group_by="ticker", threads=True, progress=False)
                 break
@@ -194,7 +193,6 @@ def download(symbols):
             
         for s in chunk:
             try:
-                # FIX 1: Extracción blindada del Multi-index para evitar fallos de lectura cruzada
                 if len(chunk) == 1:
                     sub = df
                 else:
@@ -203,7 +201,6 @@ def download(symbols):
                 if sub is None or sub.empty:
                     continue
                 
-                # Buscamos 'Adj Close' prioritario; si no, caemos de forma segura en 'Close'
                 c_col = "Adj Close" if "Adj Close" in sub.columns else "Close"
                 c = sub[c_col].dropna()
                 v = sub["Volume"].dropna() if "Volume" in sub.columns else pd.Series(dtype=float)
@@ -238,7 +235,6 @@ def compute(closes, vols, universe):
     bench = closes[bsym].dropna()
     common = bench.index
 
-    # FIX 3: Reindexación explícita para forzar que todas las acciones compartan el calendario del benchmark
     px = pd.DataFrame({u["sym"]: closes[u["sym"]] for u in universe if u["sym"] in closes})
     px = px.reindex(common).ffill(limit=5).bfill(limit=5)
     
@@ -263,7 +259,7 @@ def compute(closes, vols, universe):
     rows = []
     for c in valid:
         s = px[c].dropna()
-        u = umap = {u["sym"]: u for u in universe}[c]
+        u = {u["sym"]: u for u in universe}[c]
         last = float(s.iloc[-1])
         prev = float(s.iloc[-2]) if len(s) > 1 else last
         chg = (last / prev - 1) * 100
@@ -274,9 +270,16 @@ def compute(closes, vols, universe):
         hi, lo = float(win.max()), float(win.min())
         pfh, pfl = (last / hi - 1) * 100, (last / lo - 1) * 100
         
-        v = vols.get(c, pd.Series(dtype=float)).reindex(common, fill_value=0)
-        rv = (float(v.iloc[-1] / v.iloc[-50:].mean())
-              if (v is not None and v.shape[0] >= 50 and v.iloc[-50:].mean() > 0) else 1.0)
+        # Corrección preventiva: Relleno seguro de volumen para evitar divisiones o nulos
+        v = vols.get(c, pd.Series(dtype=float)).reindex(common, fill_value=0).fillna(1.0)
+        v_mean = v.iloc[-50:].mean()
+        
+        if v.shape[0] >= 50 and v_mean > 0:
+            last_vol = v.iloc[-1]
+            rv = float(last_vol / v_mean) if not (math.isnan(last_vol) or math.isnan(v_mean)) else 1.0
+        else:
+            rv = 1.0
+            
         R = int(rs[c])
 
         c1 = (not math.isnan(ma50)) and last > ma50
@@ -302,10 +305,11 @@ def compute(closes, vols, universe):
             "rs": R, "rs1m": int(rs1[c]), "rs3m": int(rs3[c]),
             "rs6m": int(rs6[c]), "rs12m": int(rs12[c]),
             "px": round(last, 2), "chg": round(chg, 2),
-            "rv": round(rv, 2) if not math.isnan(rv) else 1.0,
+            "rv": round(rv, 2) if not (math.isnan(rv) or math.isinf(rv)) else 1.0,
             "pctFromHigh": round(pfh, 2), "pctFromLow": round(pfl, 2),
             "trendCount": cnt, "trendOK": cnt == 6, "crit": crit,
-            "prices": [round(float(x), 4) for x in pser.iloc[-OUT_POINTS:].tolist()],
+            # Corrección preventiva: dropna() antes del tolist() para limpiar residuos de fechas vacías
+            "prices": [round(float(x), 4) for x in pser.iloc[-OUT_POINTS:].dropna().tolist()],
         })
     rows.sort(key=lambda r: r["rs"], reverse=True)
     return rows, bench_out
