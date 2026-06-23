@@ -2,7 +2,7 @@
 """
 DeepView · Acciones — pipeline de datos (Yahoo Finance)
 =======================================================
-Versión optimizada v3.3 (Multi-index, cierres seguros, protección de volumen y marcas de tiempo completas)
+Versión optimizada v3.4 (Multi-index, cierres seguros, protección de volumen y redondeo a ventana programada)
 """
 
 import argparse, json, sys, time, math
@@ -270,7 +270,6 @@ def compute(closes, vols, universe):
         hi, lo = float(win.max()), float(win.min())
         pfh, pfl = (last / hi - 1) * 100, (last / lo - 1) * 100
         
-        # Volumen robustecido frente a ceros y nulos dinámicos
         v = vols.get(c, pd.Series(dtype=float)).reindex(common, fill_value=0).fillna(1.0)
         v_mean = v.iloc[-50:].mean()
         
@@ -308,19 +307,38 @@ def compute(closes, vols, universe):
             "rv": round(rv, 2) if not (math.isnan(rv) or math.isinf(rv)) else 1.0,
             "pctFromHigh": round(pfh, 2), "pctFromLow": round(pfl, 2),
             "trendCount": cnt, "trendOK": cnt == 6, "crit": crit,
-            # Limpieza de nulos residuales de calendarios dispares
             "prices": [round(float(x), 4) for x in pser.iloc[-OUT_POINTS:].dropna().tolist()],
         })
     rows.sort(key=lambda r: r["rs"], reverse=True)
     return rows, bench_out
 
 def write(rows, bench_out, path_js, path_json):
-    # NUEVO: Sincronización completa con fecha y hora (Formato: YYYY-MM-DD HH:MM)
+    # NUEVO: Lista oficial de las 10 ventanas horarias diarias programadas del pipeline
+    ventanas_horarias = [
+        "09:00", "10:30", "12:00", "14:00", "15:30", 
+        "17:00", "18:30", "20:00", "21:30", "23:00"
+    ]
+    
     ahora = dt.datetime.now()
-    timestamp_completo = ahora.strftime("%Y-%m-%d %H:%M")
+    minutos_ahora = ahora.hour * 60 + ahora.minute
+    
+    # Buscamos de forma inteligente cuál es la ventana horaria programada teórica más cercana
+    ventana_elegida = ventanas_horarias[0]
+    min_diff = float('inf')
+    
+    for v in ventanas_horarias:
+        h, m = map(int, v.split(":"))
+        minutos_v = h * 60 + m
+        diff = abs(minutos_ahora - minutos_v)
+        if diff < min_diff:
+            min_diff = diff
+            ventana_elegida = v
+
+    # Construimos el timestamp combinando el día actual con la hora oficial de la ventana
+    timestamp_oficial = f"{ahora.strftime('%Y-%m-%d')} {ventana_elegida}"
 
     feed = {
-        "generatedAt": timestamp_completo,
+        "generatedAt": timestamp_oficial,
         "benchmark": BENCHMARK["label"],
         "benchmarkPrices": bench_out,
         "universeSize": len(rows),
