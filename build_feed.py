@@ -2,7 +2,7 @@
 """
 DeepView · Acciones — pipeline de datos (Yahoo Finance)
 =======================================================
-Versión optimizada v3.8 (Multi-index, cierres seguros, protección de volumen y redondeo a ventana programada local)
+Versión optimizada v3.9 (Multi-index, cierres seguros, protección de volumen y redondeo a ventana programada local - CORREGIDO)
 """
 
 import argparse, json, sys, time, math
@@ -231,7 +231,7 @@ def ret(s, k):
 def compute(closes, vols, universe):
     bsym = BENCHMARK["symbol"]
     if bsym not in closes:
-        print("  ! Sin datos del benchmark; uso el primer valor como referencia.")
+        print("  ! Sin datos del benchmark; uso el primer valor como reference.")
         bsym = next(iter(closes))
     bench = closes[bsym].dropna()
     common = bench.index
@@ -333,7 +333,7 @@ def write(rows, bench_out, path_js, path_json):
             min_diff = diff
             ventana_elegida = v
 
-    # Guardamos la marca temporal exacta con espacio (ej: "2026-06-23 21:30")
+    # CORREGIDO: Variable única e inequívoca en español para el cálculo limpio
     timestamp_oficial = f"{ahora.strftime('%Y-%m-%d')} {ventana_elegida}"
 
     feed = {
