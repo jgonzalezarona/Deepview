@@ -2,24 +2,12 @@
 """
 DeepView · Acciones — pipeline de datos (Yahoo Finance)
 =======================================================
-Descarga OHLCV ajustado del universo (IBEX 35, S&P 500, Nasdaq-100, Europa),
-calcula el RS Rating cross-sectional (percentil vs todo el universo) y la
-plantilla de tendencia, y genera feed.js (+ feed.json) que consume
-deepview_acciones.html.
-
-El RS percentil se calcula SOBRE ESTE UNIVERSO: cuantos más valores, más
-significativo. Amplía las listas IBEX/EUROPE o usa Wikipedia (por defecto)
-para los constituyentes US completos.
-
-Uso:
-  python build_feed.py                 # universo completo (S&P/Nasdaq desde Wikipedia)
-  python build_feed.py --no-us-wiki    # lista US curada (~65 valores, más rápido)
-  python build_feed.py --selftest      # SIN red: precios sintéticos para validar
+Versión optimizada v3.1 (Corrección de Multi-index y cierres seguros)
 """
 
 import argparse, json, sys, time, math
 import datetime as dt
-import urllib.request
+import requests
 from io import StringIO
 import numpy as np
 import pandas as pd
@@ -37,7 +25,7 @@ GICS_ES = {
     "Utilities": "Utilities", "Real Estate": "Inmobiliario",
 }
 
-# --- IBEX 35 (símbolos Yahoo con sufijo .MC) ---
+# --- IBEX 35 ---
 IBEX = {
     "SAN.MC": ("Banco Santander", "Financiero"), "BBVA.MC": ("BBVA", "Financiero"),
     "ITX.MC": ("Inditex", "Consumo discr."), "IBE.MC": ("Iberdrola", "Utilities"),
@@ -59,7 +47,7 @@ IBEX = {
     "SCYR.MC": ("Sacyr", "Industrial"),
 }
 
-# --- Europa (blue chips líquidos, símbolos Yahoo con sufijo de mercado) ---
+# --- Europa ---
 EUROPE = {
     "ASML.AS": ("ASML Holding", "Tecnología"), "ADYEN.AS": ("Adyen", "Tecnología"),
     "SAP.DE": ("SAP", "Tecnología"), "SIE.DE": ("Siemens", "Industrial"),
@@ -86,7 +74,7 @@ EUROPE = {
     "INVE-B.ST": ("Investor AB", "Financiero"), "VOLV-B.ST": ("Volvo", "Industrial"),
 }
 
-# --- Respaldo US (si falla Wikipedia) ---  symbol: (name, sector, idx)
+# --- Respaldo US ---
 FALLBACK_US = {
     "NVDA": ("NVIDIA", "Tecnología", "NDX"), "AAPL": ("Apple", "Tecnología", "NDX"),
     "MSFT": ("Microsoft", "Tecnología", "NDX"), "AMZN": ("Amazon", "Consumo discr.", "NDX"),
@@ -122,21 +110,15 @@ FALLBACK_US = {
     "UNP": ("Union Pacific", "Industrial", "SP500"),
 }
 
-
 def _wiki_tables(url):
-    """Descarga una pagina de Wikipedia con User-Agent de navegador y devuelve sus tablas.
-    Wikipedia bloquea peticiones sin User-Agent (HTTP 403); por eso no basta pd.read_html(url)."""
-    req = urllib.request.Request(url, headers={
+    headers = {
         "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36")
-    })
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        html = resp.read().decode("utf-8", "replace")
-    return pd.read_html(StringIO(html))
-
+    }
+    res = requests.get(url, headers=headers, timeout=30)
+    return pd.read_html(StringIO(res.text))
 
 def wiki_us():
-    """Constituyentes S&P 500 + Nasdaq-100 desde Wikipedia (ticker, nombre, sector)."""
     out = {}
     try:
         sp = _wiki_tables("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")[0]
@@ -149,7 +131,6 @@ def wiki_us():
         return None
     try:
         for t in _wiki_tables("https://en.wikipedia.org/wiki/Nasdaq-100"):
-            cols = [str(c) for c in t.columns]
             symcol = next((c for c in t.columns if str(c) in ("Ticker", "Symbol")), None)
             namecol = next((c for c in t.columns if "Compan" in str(c)), None)
             seccol = next((c for c in t.columns if "Sector" in str(c) or "GICS" in str(c)), None)
@@ -161,19 +142,17 @@ def wiki_us():
                     continue
                 nm = str(r[namecol]).strip()
                 sec = str(r[seccol]).strip() if seccol else out.get(sym, ("", "—"))[1]
-                out[sym] = (nm, GICS_ES.get(sec, sec or "—"), "NDX")  # Nasdaq-100 manda en la etiqueta
+                out[sym] = (nm, GICS_ES.get(sec, sec or "—"), "NDX")
             break
     except Exception as e:
         print(f"  ! Nasdaq-100 desde Wikipedia falló (sigo con S&P 500): {e}")
     return out
-
 
 def build_universe(use_wiki):
     us = wiki_us() if use_wiki else None
     if not us:
         if use_wiki:
             print("  [AVISO] No pude leer Wikipedia; uso la lista US curada (~65).")
-            print("          El total sera ~145, NO ~600. Revisa tu conexion y reintenta.")
         us = FALLBACK_US
     uni, seen = [], set()
 
@@ -191,43 +170,52 @@ def build_universe(use_wiki):
         add(sym, sym.split(".")[0], nm, sec, "EU")
     return uni
 
-
 def download(symbols):
     import yfinance as yf
     allsyms = symbols + [BENCHMARK["symbol"]]
     closes, vols = {}, {}
+    
     for i in range(0, len(allsyms), CHUNK):
         chunk = allsyms[i:i + CHUNK]
         print(f"  · {i + 1}–{min(i + CHUNK, len(allsyms))} / {len(allsyms)}…")
         df = None
         for attempt in range(3):
             try:
-                df = yf.download(chunk, period="2y", interval="1d", auto_adjust=True,
+                # Quitamos auto_adjust=True para evitar cierres vacíos en mercados EU e Índices
+                df = yf.download(chunk, period="2y", interval="1d", 
                                  group_by="ticker", threads=True, progress=False)
                 break
             except Exception as e:
                 print(f"    reintento {attempt + 1}: {e}")
                 time.sleep(2)
+                
         if df is None or df.empty:
-            print("    lote vacío, salto.")
             continue
+            
         for s in chunk:
             try:
-                sub = df if len(chunk) == 1 else (df[s] if s in df.columns.get_level_values(0) else None)
+                # FIX 1: Extracción blindada del Multi-index para evitar fallos de lectura cruzada
+                if len(chunk) == 1:
+                    sub = df
+                else:
+                    sub = df[s] if s in df.columns.get_level_values(0) else None
+                    
                 if sub is None or sub.empty:
                     continue
-                c = sub["Close"].dropna()
-                v = sub["Volume"].dropna()
+                
+                # Buscamos 'Adj Close' prioritario; si no, caemos de forma segura en 'Close'
+                c_col = "Adj Close" if "Adj Close" in sub.columns else "Close"
+                c = sub[c_col].dropna()
+                v = sub["Volume"].dropna() if "Volume" in sub.columns else pd.Series(dtype=float)
+                
                 if c.shape[0] >= 60:
                     closes[s], vols[s] = c, v
             except Exception:
                 continue
-        time.sleep(1)
+        time.sleep(0.5)
     return closes, vols
 
-
 def synth_prices(universe):
-    """Precios sintéticos para --selftest (sin red)."""
     rng = np.random.default_rng(42)
     idx = pd.bdate_range(end=dt.date.today(), periods=504)
     days = len(idx)
@@ -239,10 +227,8 @@ def synth_prices(universe):
         vols[s] = pd.Series(rng.uniform(1e6, 6e6, days), index=idx)
     return closes, vols
 
-
 def ret(s, k):
     return float(s.iloc[-1] / s.iloc[-1 - k] - 1.0) if len(s) > k else np.nan
-
 
 def compute(closes, vols, universe):
     bsym = BENCHMARK["symbol"]
@@ -252,12 +238,13 @@ def compute(closes, vols, universe):
     bench = closes[bsym].dropna()
     common = bench.index
 
+    # FIX 3: Reindexación explícita para forzar que todas las acciones compartan el calendario del benchmark
     px = pd.DataFrame({u["sym"]: closes[u["sym"]] for u in universe if u["sym"] in closes})
-    px = px.reindex(common).ffill(limit=3)
+    px = px.reindex(common).ffill(limit=5).bfill(limit=5)
+    
     valid = [c for c in px.columns if px[c].dropna().shape[0] >= MIN_HISTORY]
     print(f"  · {len(valid)} valores con histórico suficiente (≥{MIN_HISTORY} sesiones).")
 
-    # --- pass 1: estadísticos de momentum ---
     stat = {}
     for c in valid:
         s = px[c].dropna()
@@ -272,13 +259,11 @@ def compute(closes, vols, universe):
     rs, rs1, rs3, rs6, rs12 = (rank99("blended"), rank99("r1"), rank99("r3"),
                                rank99("r6"), rank99("r12"))
 
-    # --- pass 2: filas ---
-    umap = {u["sym"]: u for u in universe}
     bench_out = [round(float(x), 4) for x in bench.iloc[-OUT_POINTS:].tolist()]
     rows = []
     for c in valid:
         s = px[c].dropna()
-        u = umap[c]
+        u = umap = {u["sym"]: u for u in universe}[c]
         last = float(s.iloc[-1])
         prev = float(s.iloc[-2]) if len(s) > 1 else last
         chg = (last / prev - 1) * 100
@@ -288,9 +273,10 @@ def compute(closes, vols, universe):
         win = s.iloc[-252:]
         hi, lo = float(win.max()), float(win.min())
         pfh, pfl = (last / hi - 1) * 100, (last / lo - 1) * 100
-        v = vols.get(c)
+        
+        v = vols.get(c, pd.Series(dtype=float)).reindex(common, fill_value=0)
         rv = (float(v.iloc[-1] / v.iloc[-50:].mean())
-              if (v is not None and v.shape[0] >= 50 and v.iloc[-50:].mean() > 0) else np.nan)
+              if (v is not None and v.shape[0] >= 50 and v.iloc[-50:].mean() > 0) else 1.0)
         R = int(rs[c])
 
         c1 = (not math.isnan(ma50)) and last > ma50
@@ -310,7 +296,7 @@ def compute(closes, vols, universe):
             {"ok": bool(c6), "tx": "RS Rating ≥ 70", "vx": str(R)},
         ]
         cnt = sum(1 for x in crit if x["ok"])
-        pser = px[c].ffill().bfill()
+        pser = s.ffill().bfill()
         rows.append({
             "sym": c, "t": u["t"], "n": u["n"], "idx": u["idx"], "sec": u["sec"],
             "rs": R, "rs1m": int(rs1[c]), "rs3m": int(rs3[c]),
@@ -323,7 +309,6 @@ def compute(closes, vols, universe):
         })
     rows.sort(key=lambda r: r["rs"], reverse=True)
     return rows, bench_out
-
 
 def write(rows, bench_out, path_js, path_json):
     feed = {
@@ -339,7 +324,6 @@ def write(rows, bench_out, path_js, path_json):
     with open(path_json, "w", encoding="utf-8") as f:
         json.dump(feed, f, ensure_ascii=False, separators=(",", ":"))
     print(f"  ✓ {path_js} ({len(js) / 1e6:.2f} MB) y {path_json} escritos · {len(rows)} valores.")
-
 
 def main():
     ap = argparse.ArgumentParser(description="Pipeline de datos DeepView (Yahoo Finance)")
@@ -358,7 +342,7 @@ def main():
         print("Modo selftest: precios sintéticos (sin Yahoo).")
         closes, vols = synth_prices(uni)
     else:
-        print("Descargando de Yahoo Finance (la primera vez puede tardar varios minutos)…")
+        print("Descargando de Yahoo Finance…")
         closes, vols = download([u["sym"] for u in uni])
 
     if not closes:
@@ -372,7 +356,6 @@ def main():
     tok = sum(1 for r in rows if r["trendOK"])
     print(f"Resumen: {len(rows)} valores · {led} líderes (RS≥80) · {tok} con plantilla OK.")
     print("Top 5 por RS:", ", ".join(f"{r['t']}({r['rs']})" for r in rows[:5]))
-    print("\nListo. Abre deepview_acciones.html (debe estar en la misma carpeta que feed.js).")
 
 
 if __name__ == "__main__":
