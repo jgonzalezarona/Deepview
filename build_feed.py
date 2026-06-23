@@ -2,7 +2,7 @@
 """
 DeepView · Acciones — pipeline de datos (Yahoo Finance)
 =======================================================
-Versión optimizada v3.5 (Multi-index, cierres seguros, protección de volumen y redondeo a ventana programada en hora local)
+Versión optimizada v3.6 (Multi-index, cierres seguros, protección de volumen y marcas duales de actualización)
 """
 
 import argparse, json, sys, time, math
@@ -11,7 +11,7 @@ import requests
 from io import StringIO
 import numpy as np
 import pandas as pd
-from zoneinfo import ZoneInfo  # Asegura el control de zonas horarias en servidores externos
+from zoneinfo import ZoneInfo
 
 OUT_POINTS = 380      # nº de sesiones que se mandan al gráfico (para MA200 completa)
 MIN_HISTORY = 252     # mínimo de sesiones para entrar en el ranking
@@ -314,21 +314,17 @@ def compute(closes, vols, universe):
     return rows, bench_out
 
 def write(rows, bench_out, path_js, path_json):
-    # Lista de las 10 ventanas horarias diarias programadas
     ventanas_horarias = [
         "09:00", "10:30", "12:00", "14:00", "15:30", 
         "17:00", "18:30", "20:00", "21:30", "23:00"
     ]
     
-    # CORRECCIÓN DE ZONA HORARIA: Forzamos la obtención del tiempo en base a la hora de España (Europe/Madrid)
     tz_madrid = ZoneInfo("Europe/Madrid")
     ahora = dt.datetime.now(tz_madrid)
     minutos_ahora = ahora.hour * 60 + ahora.minute
     
-    # Buscamos de forma precisa cuál es la ventana horaria teórica más cercana
     ventana_elegida = ventanas_horarias[0]
     min_diff = float('inf')
-    
     for v in ventanas_horarias:
         h, m = map(int, v.split(":"))
         minutos_v = h * 60 + m
@@ -337,11 +333,11 @@ def write(rows, bench_out, path_js, path_json):
             min_diff = diff
             ventana_elegida = v
 
-    # Construimos el timestamp en base al día local madrileño y la ventana teórica calculada
     timestamp_oficial = f"{ahora.strftime('%Y-%m-%d')} {ventana_elegida}"
 
     feed = {
-        "generatedAt": timestamp_oficial,
+        "generatedAt": ahora.strftime('%Y-%m-%d'), # Dejamos la propiedad original intacta por si la usa otra función nativa
+        "customDateString": timestamp_oficial,      # NUEVO CAMPO: Contiene el String explícito con la hora oficial ("2026-06-23 21:30")
         "benchmark": BENCHMARK["label"],
         "benchmarkPrices": bench_out,
         "universeSize": len(rows),
