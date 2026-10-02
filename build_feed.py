@@ -244,6 +244,140 @@ def ret(s, k):
     return float(s.iloc[-1] / s.iloc[-1 - k] - 1.0) if len(s) > k else np.nan
 
 
+
+def _aligned_market_data(close, volume):
+    """Alinea cierre y volumen por fecha, elimina huecos y volúmenes no válidos."""
+    if close is None or volume is None:
+        return pd.DataFrame(columns=["close", "volume"])
+    frame = pd.concat(
+        [close.rename("close"), volume.rename("volume")],
+        axis=1,
+        join="inner",
+    ).dropna()
+    return frame[frame["volume"] > 0]
+
+
+def calc_flow_days(close, volume, lookback=20, min_move=0.002):
+    """Cuenta sesiones de acumulación y distribución con volumen creciente."""
+    frame = _aligned_market_data(close, volume)
+    if len(frame) < lookback + 1:
+        return 0, 0
+
+    recent = frame.iloc[-(lookback + 1):]
+    returns = recent["close"].pct_change()
+    volume_up = recent["volume"] > recent["volume"].shift(1)
+
+    distribution = int(((returns <= -min_move) & volume_up).sum())
+    accumulation = int(((returns >= min_move) & volume_up).sum())
+    return distribution, accumulation
+
+
+def calc_dry_metrics(close, volume, rs_rank, above_ma50, lookback=10):
+    """Devuelve días secos y un score 0-100 de contracción de volumen/precio."""
+    frame = _aligned_market_data(close, volume)
+    if len(frame) < 60:
+        return 0, 0.0
+
+    c = frame["close"]
+    v = frame["volume"]
+    vol_ma50 = v.rolling(50).mean()
+    rel_volume = v / vol_ma50
+    abs_returns = c.pct_change().abs()
+
+    recent_rel = rel_volume.iloc[-lookback:]
+    recent_move = abs_returns.iloc[-lookback:]
+    dry_days = int(((recent_rel < 0.60) & (recent_move < 0.015)).sum())
+
+    vol_ratio = float(v.iloc[-10:].mean() / v.iloc[-50:].mean())
+    ret10 = c.pct_change().iloc[-10:]
+    ret50 = c.pct_change().iloc[-50:]
+    volatility_ratio = float(ret10.std() / ret50.std()) if ret50.std() > 0 else 1.0
+
+    range10 = float(c.iloc[-10:].max() / c.iloc[-10:].min() - 1.0)
+    range50 = float(c.iloc[-50:].max() / c.iloc[-50:].min() - 1.0)
+    range_ratio = range10 / range50 if range50 > 0 else 1.0
+
+    volume_score = np.clip((1.0 - vol_ratio) / 0.60, 0.0, 1.0) * 100.0
+    volatility_score = np.clip((1.0 - volatility_ratio) / 0.60, 0.0, 1.0) * 100.0
+    range_score = np.clip((1.0 - range_ratio) / 0.75, 0.0, 1.0) * 100.0
+    score = 0.50 * volume_score + 0.30 * volatility_score + 0.20 * range_score
+
+    # El volumen seco en una acción débil puede ser simple falta de demanda.
+    if rs_rank < 50:
+        score *= 0.75
+    if not above_ma50:
+        score *= 0.80
+
+    return dry_days, round(float(np.clip(score, 0.0, 100.0)), 1)
+
+
+def calc_selling_climax(close, volume, lookback=10):
+    """Detecta una posible capitulación reciente: caída fuerte y volumen excepcional."""
+    frame = _aligned_market_data(close, volume)
+    if len(frame) < 60:
+        return False, None
+
+    c = frame["close"]
+    v = frame["volume"]
+    returns = c.pct_change()
+    vol_ma50 = v.rolling(50).mean()
+    rel_volume = v / vol_ma50
+
+    recent = pd.DataFrame({"ret": returns, "rv": rel_volume}).iloc[-lookback:]
+    hits = recent[(recent["ret"] <= -0.04) & (recent["rv"] >= 1.80)]
+    if hits.empty:
+        return False, None
+    return True, hits.index[-1].date().isoformat()
+
+
+def calc_vcp_score(close, volume):
+    """Score 0-100 de contracción reciente de volatilidad, rango y volumen."""
+    frame = _aligned_market_data(close, volume)
+    if len(frame) < 80:
+        return 0.0
+
+    c = frame["close"]
+    v = frame["volume"]
+    returns = c.pct_change()
+
+    recent_volatility = float(returns.iloc[-20:].std())
+    prior_volatility = float(returns.iloc[-60:-20].std())
+    volatility_ratio = recent_volatility / prior_volatility if prior_volatility > 0 else 1.0
+
+    recent_range = float(c.iloc[-20:].max() / c.iloc[-20:].min() - 1.0)
+    prior_range = float(c.iloc[-60:-20].max() / c.iloc[-60:-20].min() - 1.0)
+    range_ratio = recent_range / prior_range if prior_range > 0 else 1.0
+
+    volume_ratio = float(v.iloc[-20:].mean() / v.iloc[-60:-20].mean())
+
+    volatility_score = np.clip((1.0 - volatility_ratio) / 0.60, 0.0, 1.0) * 100.0
+    range_score = np.clip((1.0 - range_ratio) / 0.60, 0.0, 1.0) * 100.0
+    volume_score = np.clip((1.0 - volume_ratio) / 0.50, 0.0, 1.0) * 100.0
+
+    score = 0.40 * volatility_score + 0.35 * range_score + 0.25 * volume_score
+    return round(float(np.clip(score, 0.0, 100.0)), 1)
+
+
+def classify_signal(last, ma50, ma200, rs_rank, dry_score, vcp_score,
+                    distribution20, accumulation20, selling_climax):
+    """Clasifica el estado. Es una señal de cribado, no una orden de compra/venta."""
+    below_ma50 = not math.isnan(ma50) and last < ma50
+    below_ma200 = not math.isnan(ma200) and last < ma200
+    above_ma50 = not math.isnan(ma50) and last > ma50
+
+    if distribution20 >= 7 and rs_rank < 50 and below_ma50:
+        return "BREAKDOWN"
+    if distribution20 >= 5 and distribution20 >= accumulation20 + 2:
+        return "DISTRIBUTION"
+    if above_ma50 and rs_rank >= 70 and dry_score >= 55 and vcp_score >= 50 and distribution20 <= 3:
+        return "VCP"
+    if selling_climax and dry_score >= 35 and distribution20 <= 4 and not below_ma200:
+        return "PULLBACK"
+    if accumulation20 >= 5 and accumulation20 >= distribution20 + 2:
+        return "ACCUMULATION"
+    return "NEUTRAL"
+
+
 def compute(closes, vols, universe):
     bsym = BENCHMARK["symbol"]
     if bsym not in closes:
@@ -293,48 +427,47 @@ def compute(closes, vols, universe):
         rv = (float(v.iloc[-1] / v.iloc[-50:].mean())
               if (v is not None and v.shape[0] >= 50 and v.iloc[-50:].mean() > 0) else np.nan)
         
-        # -------------------------------------------------------------
-        # INYECCIÓN DEL SETUP VCP: Cálculo de Días Secos (10 días)
-        # -------------------------------------------------------------
-        dry_days = 0
-        if v is not None and len(v) >= 50 and len(s) >= 11:
-            v_last10 = v.iloc[-10:]
-            v_ma50 = v.rolling(50).mean().iloc[-10:]
-            rel_vols = v_last10 / v_ma50
-            ret_last10 = s.iloc[-11:].pct_change().dropna().abs()
-            
-            for i in range(len(rel_vols)):
-                if rel_vols.iloc[i] < 0.6 and ret_last10.iloc[i] < 0.015:
-                    dry_days += 1
-        # -------------------------------------------------------------
-
-    # -------------------------------------------------------------
-        # MÉTRICA DE DISTRIBUCIÓN INSTITUCIONAL (Gotas = Días consecutivos bajando con volumen)
-        # -------------------------------------------------------------
-        heavy_days_count = 0
-        if v is not None and len(v) >= 50 and len(s) >= 5:
-            v_ma50 = v.rolling(50).mean()
-            daily_rets = s.pct_change()
-            
-            # 1. Contar cuántas sesiones consecutivas cerrando a la baja hay al final
-            consecutive_reds = 0
-            for i in range(1, len(s)):
-                if daily_rets.iloc[-i] < 0:
-                    consecutive_reds += 1
-                else:
-                    break
-            
-            # 2. Si lleva al menos 1 día bajando consecutivamente
-            if consecutive_reds >= 1:
-                # Verificar si en ese tramo de días consecutivos hubo volumen institucional (> 1.3 x MA50)
-                rel_vols_recent = v.iloc[-consecutive_reds:] / v_ma50.iloc[-consecutive_reds:]
-                vol_institucional = (rel_vols_recent > 1.3).any()
-                
-                if vol_institucional:
-                    # Tantas gotas rojas como días consecutivos lleva bajando
-                    heavy_days_count = int(consecutive_reds)
-        # -------------------------------------------------------------
         R = int(rs[c])
+        above_ma50 = (not math.isnan(ma50)) and last > ma50
+
+        distribution20 = 0
+        accumulation20 = 0
+        dry_days = 0
+        dry_score = 0.0
+        vcp_score = 0.0
+        selling_climax = False
+        selling_climax_date = None
+
+        if v is not None:
+            distribution20, accumulation20 = calc_flow_days(s, v, lookback=20)
+            dry_days, dry_score = calc_dry_metrics(
+                s, v, rs_rank=R, above_ma50=above_ma50, lookback=10
+            )
+            vcp_score = calc_vcp_score(s, v)
+            selling_climax, selling_climax_date = calc_selling_climax(s, v, lookback=10)
+
+        signal = classify_signal(
+            last=last,
+            ma50=ma50,
+            ma200=ma200,
+            rs_rank=R,
+            dry_score=dry_score,
+            vcp_score=vcp_score,
+            distribution20=distribution20,
+            accumulation20=accumulation20,
+            selling_climax=selling_climax,
+        )
+
+        flow_balance = accumulation20 - distribution20
+        institutional_score = (
+            0.30 * dry_score
+            + 0.25 * vcp_score
+            + 0.20 * R
+            + 2.5 * flow_balance
+        )
+        institutional_score = round(float(np.clip(institutional_score, 0.0, 100.0)), 1)
+
+
 
         c1 = (not math.isnan(ma50)) and last > ma50
         c2 = (not math.isnan(ma50)) and (not math.isnan(ma200)) and ma50 > ma200
@@ -360,13 +493,23 @@ def compute(closes, vols, universe):
             "rs6m": int(rs6[c]), "rs12m": int(rs12[c]),
             "px": round(last, 2), "chg": round(chg, 2),
             "rv": round(rv, 2) if not math.isnan(rv) else 1.0,
+            # Compatibilidad con la interfaz actual y métricas nuevas.
             "dryDays10": int(dry_days),
-            "heavyDays10": int(heavy_days_count),
+            "heavyDays10": int(distribution20),
+            "distribution20": int(distribution20),
+            "accumulation20": int(accumulation20),
+            "flowBalance20": int(flow_balance),
+            "dryScore": dry_score,
+            "vcpScore": vcp_score,
+            "sellingClimax": bool(selling_climax),
+            "sellingClimaxDate": selling_climax_date,
+            "institutionalScore": institutional_score,
+            "signal": signal,
             "pctFromHigh": round(pfh, 2), "pctFromLow": round(pfl, 2),
             "trendCount": cnt, "trendOK": cnt == 6, "crit": crit,
             "prices": [round(float(x), 4) for x in pser.iloc[-OUT_POINTS:].tolist()],
         })
-    rows.sort(key=lambda r: r["rs"], reverse=True)
+    rows.sort(key=lambda r: (r["institutionalScore"], r["rs"]), reverse=True)
     return rows, bench_out
 
 
@@ -416,7 +559,9 @@ def main():
     led = sum(1 for r in rows if r["rs"] >= 80)
     tok = sum(1 for r in rows if r["trendOK"])
     print(f"Resumen: {len(rows)} valores · {led} líderes (RS≥80) · {tok} con plantilla OK.")
-    print("Top 5 por RS:", ", ".join(f"{r['t']}({r['rs']})" for r in rows[:5]))
+    print("Top 5 institucional:", ", ".join(
+        f"{r['t']}({r['institutionalScore']}, {r['signal']})" for r in rows[:5]
+    ))
     print("\nListo. Abre deepview_acciones.html (debe estar en la misma carpeta que feed.js).")
 
 
