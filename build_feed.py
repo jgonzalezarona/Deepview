@@ -309,17 +309,18 @@ def compute(closes, vols, universe):
         # -------------------------------------------------------------
 
         # -------------------------------------------------------------
-        # MÉTRICA SÓLIDA DE DISTRIBUCIÓN INSTITUCIONAL (Ventana de 15 sesiones)
+        # MÉTRICA SÓLIDA DE DISTRIBUCIÓN INSTITUCIONAL (Ventana de 15 sesiones - Ajustada para evitar falsos positivos)
         # -------------------------------------------------------------
         heavy_days_count = 0
         if v is not None and len(v) >= 50 and len(s) >= 15:
             v_last15 = v.iloc[-15:]
             v_ma50_15 = v.rolling(50).mean().iloc[-15:]
             rel_vols_15 = v_last15 / v_ma50_15
-            ret_last15 = s.iloc[-16:].pct_change().dropna()
+            ret_last15 = s.iloc[-15:].pct_change()
             
             for i in range(len(rel_vols_15)):
-                if rel_vols_15.iloc[i] > 1.3 and ret_last15.iloc[i] < -0.01:
+                # Exigimos volumen alto (>40% sobre media) Y caída seria (>1.5%)
+                if rel_vols_15.iloc[i] > 1.4 and ret_last15.iloc[i] < -0.015:
                     heavy_days_count += 1
         # -------------------------------------------------------------
 
