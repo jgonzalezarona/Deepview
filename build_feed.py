@@ -298,22 +298,29 @@ def compute(closes, vols, universe):
         # -------------------------------------------------------------
         dry_days = 0
         if v is not None and len(v) >= 50 and len(s) >= 11:
-            # Seleccionamos los últimos 10 días de volumen
             v_last10 = v.iloc[-10:]
-            # Calculamos la media de 50 sesiones para cada uno de esos 10 días
             v_ma50 = v.rolling(50).mean().iloc[-10:]
-            # Calculamos el Ratio de Volumen para esos 10 días
             rel_vols = v_last10 / v_ma50
-            
-            # Calculamos la variación absoluta diaria del cierre (necesitamos 11 días para 10 retornos)
             ret_last10 = s.iloc[-11:].pct_change().dropna().abs()
             
             for i in range(len(rel_vols)):
-                # REGLA DE CONTRACCIÓN MINERVINI:
-                # 1. Volumen Relativo menor al 60% (0.6)
-                # 2. Cierre diario apenas se mueve (variación menor al 1.5% o 0.015)
                 if rel_vols.iloc[i] < 0.6 and ret_last10.iloc[i] < 0.015:
                     dry_days += 1
+        # -------------------------------------------------------------
+
+        # -------------------------------------------------------------
+        # MÉTRICA SÓLIDA DE DISTRIBUCIÓN INSTITUCIONAL (Ventana de 15 sesiones)
+        # -------------------------------------------------------------
+        heavy_days_count = 0
+        if v is not None and len(v) >= 50 and len(s) >= 15:
+            v_last15 = v.iloc[-15:]
+            v_ma50_15 = v.rolling(50).mean().iloc[-15:]
+            rel_vols_15 = v_last15 / v_ma50_15
+            ret_last15 = s.iloc[-16:].pct_change().dropna()
+            
+            for i in range(len(rel_vols_15)):
+                if rel_vols_15.iloc[i] > 1.3 and ret_last15.iloc[i] < -0.01:
+                    heavy_days_count += 1
         # -------------------------------------------------------------
 
         R = int(rs[c])
@@ -342,7 +349,8 @@ def compute(closes, vols, universe):
             "rs6m": int(rs6[c]), "rs12m": int(rs12[c]),
             "px": round(last, 2), "chg": round(chg, 2),
             "rv": round(rv, 2) if not math.isnan(rv) else 1.0,
-            "dryDays10": int(dry_days), # <--- AQUÍ SE AÑADE AL JSON
+            "dryDays10": int(dry_days),
+            "heavyDays10": int(heavy_days_count),
             "pctFromHigh": round(pfh, 2), "pctFromLow": round(pfl, 2),
             "trendCount": cnt, "trendOK": cnt == 6, "crit": crit,
             "prices": [round(float(x), 4) for x in pser.iloc[-OUT_POINTS:].tolist()],
