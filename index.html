@@ -609,12 +609,11 @@ function chgStr(v){return (v>0?"+":"")+v.toFixed(1)+"%";}
 // LÓGICA VISUAL VCP / DISTRIBUCIÓN
 function vcpCell(r){
   if(r.heavyDays10 && r.heavyDays10 >= 3){
-    // Iconos de gotas en rojo usando un SVG inline pequeño para forzar el color
     let drops = '';
     for(let i=0; i<r.heavyDays10; i++){
       drops += `<svg width="10" height="13" viewBox="0 0 24 24" fill="#F2655C" style="margin-right:1px;"><path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z"/></svg>`;
     }
-    return `<span style="display:inline-flex; align-items:center;" title="¡Alerta! ${r.heavyDays10} días de distribución institucional en 15 sesiones">${drops} ⚠️</span>`;
+    return `<span style="display:inline-flex; align-items:center;" title="${r.heavyDays10} días de distribución institucional en 15 sesiones">${drops}</span>`;
   }
   if(r.dryDays10 && r.dryDays10 > 0){
     let drops = '';
