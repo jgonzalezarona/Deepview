@@ -308,8 +308,8 @@ def compute(closes, vols, universe):
                     dry_days += 1
         # -------------------------------------------------------------
 
-       # -------------------------------------------------------------
-        # MÉTRICA SÓLIDA DE DISTRIBUCIÓN INSTITUCIONAL (Filtro con EMA 21)
+      # -------------------------------------------------------------
+        # MÉTRICA SÓLIDA DE DISTRIBUCIÓN INSTITUCIONAL (Filtro de Tendencia / EMA 21)
         # -------------------------------------------------------------
         heavy_days_count = 0
         if v is not None and len(v) >= 50 and len(s) >= 15:
@@ -318,15 +318,15 @@ def compute(closes, vols, universe):
             rel_vols_15 = v_last15 / v_ma50_15
             ret_last15 = s.iloc[-15:].pct_change()
             
-            # Calculamos la EMA 21 para evaluar si respeta la tendencia de corto plazo
+            # Calculamos la EMA 21 de las últimas 15 sesiones para comprobar soporte dinámico
             ema21_15 = s.ewm(span=21, adjust=False).mean().iloc[-15:]
             
             for i in range(len(rel_vols_15)):
-                # CONDICIÓN INSTITUCIONAL REAL:
-                # 1. Volumen elevado (> 40% sobre la media de 50)
-                # 2. Caída importante en la sesión (> 1.5%)
-                # 3. FILTRO DE CORRECCIÓN SANA: El precio debe estar por debajo de la EMA 21.
-                #    (Si está por encima, es una corrección/pullback saludable y se ignora)
+                # REGLA INSTITUCIONAL REAL:
+                # 1. Volumen alto (>40% sobre la media)
+                # 2. Caída seria en el día (>1.5%)
+                # 3. FILTRO CLAVE: El precio del día está POR DEBAJO de su EMA 21 
+                #    (si está por encima, es un pullback alcista saludable, no distribución)
                 if (rel_vols_15.iloc[i] > 1.4 and 
                     ret_last15.iloc[i] < -0.015 and 
                     s.iloc[-15+i] < ema21_15.iloc[i]):
