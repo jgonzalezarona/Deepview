@@ -6,15 +6,6 @@ Descarga OHLCV ajustado del universo (IBEX 35, S&P 500, Nasdaq-100, Europa),
 calcula el RS Rating cross-sectional (percentil vs todo el universo) y la
 plantilla de tendencia, y genera feed.js (+ feed.json) que consume
 deepview_acciones.html.
-
-El RS percentil se calcula SOBRE ESTE UNIVERSO: cuantos más valores, más
-significativo. Amplía las listas IBEX/EUROPE o usa Wikipedia (por defecto)
-para los constituyentes US completos.
-
-Uso:
-  python build_feed.py                 # universo completo (S&P/Nasdaq desde Wikipedia)
-  python build_feed.py --no-us-wiki    # lista US curada (~65 valores, más rápido)
-  python build_feed.py --selftest      # SIN red: precios sintéticos para validar
 """
 
 import argparse, json, sys, time, math
@@ -28,6 +19,17 @@ OUT_POINTS = 380      # nº de sesiones que se mandan al gráfico (para MA200 co
 MIN_HISTORY = 252     # mínimo de sesiones para entrar en el ranking
 CHUNK = 80            # tamaño de lote en la descarga
 BENCHMARK = {"symbol": "ACWI", "label": "ACWI (MSCI All-Country)"}
+
+# --- CONFIGURACIÓN CENTRALIZADA DE ESTRATEGIA ---
+STRATEGY_CONFIG = {
+    "min_rs_rating": 70,           # RS mínimo para plantillas de tendencia / VCP
+    "flow_lookback": 20,           # Ventana para días de acumulación/distribución
+    "min_flow_move": 0.002,        # Movimiento mínimo porcentual para flujo institucional
+    "dry_lookback": 10,            # Ventana de sesiones para análisis de volumen seco
+    "dry_vol_threshold": 0.55,     # Umbral de volumen relativo para considerar día seco (más estricto)
+    "dry_move_threshold": 0.012,   # Rango de precio máximo permitido en día seco (1.2%)
+    "climax_vol_mult": 1.80,       # Multiplicador de volumen para clímax vendedor
+}
 
 GICS_ES = {
     "Information Technology": "Tecnología", "Health Care": "Salud",
@@ -59,7 +61,7 @@ IBEX = {
     "SCYR.MC": ("Sacyr", "Industrial"),
 }
 
-# --- Europa (blue chips líquidos, símbolos Yahoo con sufijo de mercado) ---
+# --- Europa (blue chips líquidos) ---
 EUROPE = {
     "ASML.AS": ("ASML Holding", "Tecnología"), "ADYEN.AS": ("Adyen", "Tecnología"),
     "SAP.DE": ("SAP", "Tecnología"), "SIE.DE": ("Siemens", "Industrial"),
@@ -86,7 +88,6 @@ EUROPE = {
     "INVE-B.ST": ("Investor AB", "Financiero"), "VOLV-B.ST": ("Volvo", "Industrial"),
 }
 
-# --- Respaldo US (si falla Wikipedia) ---  symbol: (name, sector, idx)
 FALLBACK_US = {
     "NVDA": ("NVIDIA", "Tecnología", "NDX"), "AAPL": ("Apple", "Tecnología", "NDX"),
     "MSFT": ("Microsoft", "Tecnología", "NDX"), "AMZN": ("Amazon", "Consumo discr.", "NDX"),
@@ -124,8 +125,6 @@ FALLBACK_US = {
 
 
 def _wiki_tables(url):
-    """Descarga una pagina de Wikipedia con User-Agent de navegador y devuelve sus tablas.
-    Wikipedia bloquea peticiones sin User-Agent (HTTP 403); por eso no basta pd.read_html(url)."""
     req = urllib.request.Request(url, headers={
         "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36")
@@ -136,7 +135,6 @@ def _wiki_tables(url):
 
 
 def wiki_us():
-    """Constituyentes S&P 500 + Nasdaq-100 desde Wikipedia (ticker, nombre, sector)."""
     out = {}
     try:
         sp = _wiki_tables("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")[0]
@@ -149,7 +147,6 @@ def wiki_us():
         return None
     try:
         for t in _wiki_tables("https://en.wikipedia.org/wiki/Nasdaq-100"):
-            cols = [str(c) for c in t.columns]
             symcol = next((c for c in t.columns if str(c) in ("Ticker", "Symbol")), None)
             namecol = next((c for c in t.columns if "Compan" in str(c)), None)
             seccol = next((c for c in t.columns if "Sector" in str(c) or "GICS" in str(c)), None)
@@ -161,10 +158,10 @@ def wiki_us():
                     continue
                 nm = str(r[namecol]).strip()
                 sec = str(r[seccol]).strip() if seccol else out.get(sym, ("", "—"))[1]
-                out[sym] = (nm, GICS_ES.get(sec, sec or "—"), "NDX")  # Nasdaq-100 manda en la etiqueta
+                out[sym] = (nm, GICS_ES.get(sec, sec or "—"), "NDX")
             break
     except Exception as e:
-        print(f"  ! Nasdaq-100 desde Wikipedia falló (sigo con S&P 500): {e}")
+        print(f"  ! Nasdaq-100 desde Wikipedia falló: {e}")
     return out
 
 
@@ -173,7 +170,6 @@ def build_universe(use_wiki):
     if not us:
         if use_wiki:
             print("  [AVISO] No pude leer Wikipedia; uso la lista US curada (~65).")
-            print("          El total sera ~145, NO ~600. Revisa tu conexion y reintenta.")
         us = FALLBACK_US
     uni, seen = [], set()
 
@@ -227,7 +223,6 @@ def download(symbols):
 
 
 def synth_prices(universe):
-    """Precios sintéticos para --selftest (sin red)."""
     rng = np.random.default_rng(42)
     idx = pd.bdate_range(end=dt.date.today(), periods=504)
     days = len(idx)
@@ -244,9 +239,7 @@ def ret(s, k):
     return float(s.iloc[-1] / s.iloc[-1 - k] - 1.0) if len(s) > k else np.nan
 
 
-
 def _aligned_market_data(close, volume):
-    """Alinea cierre y volumen por fecha, elimina huecos y volúmenes no válidos."""
     if close is None or volume is None:
         return pd.DataFrame(columns=["close", "volume"])
     frame = pd.concat(
@@ -257,23 +250,24 @@ def _aligned_market_data(close, volume):
     return frame[frame["volume"] > 0]
 
 
-def calc_flow_days(close, volume, lookback=20, min_move=0.002):
-    """Cuenta sesiones de acumulación y distribución con volumen creciente."""
+def calc_flow_days(close, volume):
+    cfg = STRATEGY_CONFIG
     frame = _aligned_market_data(close, volume)
-    if len(frame) < lookback + 1:
+    if len(frame) < cfg["flow_lookback"] + 1:
         return 0, 0
 
-    recent = frame.iloc[-(lookback + 1):]
+    recent = frame.iloc[-(cfg["flow_lookback"] + 1):]
     returns = recent["close"].pct_change()
     volume_up = recent["volume"] > recent["volume"].shift(1)
 
-    distribution = int(((returns <= -min_move) & volume_up).sum())
-    accumulation = int(((returns >= min_move) & volume_up).sum())
+    distribution = int(((returns <= -cfg["min_move"]) & volume_up).sum())
+    accumulation = int(((returns >= cfg["min_move"]) & volume_up).sum())
     return distribution, accumulation
 
 
-def calc_dry_metrics(close, volume, rs_rank, above_ma50, lookback=10):
-    """Devuelve días secos y un score 0-100 de contracción de volumen/precio."""
+def calc_dry_metrics(close, volume, rs_rank, above_ma50):
+    """Métrica mejorada de volumen seco y compresión de volatilidad."""
+    cfg = STRATEGY_CONFIG
     frame = _aligned_market_data(close, volume)
     if len(frame) < 60:
         return 0, 0.0
@@ -284,9 +278,12 @@ def calc_dry_metrics(close, volume, rs_rank, above_ma50, lookback=10):
     rel_volume = v / vol_ma50
     abs_returns = c.pct_change().abs()
 
+    lookback = cfg["dry_lookback"]
     recent_rel = rel_volume.iloc[-lookback:]
     recent_move = abs_returns.iloc[-lookback:]
-    dry_days = int(((recent_rel < 0.60) & (recent_move < 0.015)).sum())
+    
+    # Días estrictos donde el volumen está seco y el precio está estrecho (VCP / pausa sana)
+    dry_days = int(((recent_rel < cfg["dry_vol_threshold"]) & (recent_move < cfg["dry_move_threshold"])).sum())
 
     vol_ratio = float(v.iloc[-10:].mean() / v.iloc[-50:].mean())
     ret10 = c.pct_change().iloc[-10:]
@@ -302,7 +299,7 @@ def calc_dry_metrics(close, volume, rs_rank, above_ma50, lookback=10):
     range_score = np.clip((1.0 - range_ratio) / 0.75, 0.0, 1.0) * 100.0
     score = 0.50 * volume_score + 0.30 * volatility_score + 0.20 * range_score
 
-    # El volumen seco en una acción débil puede ser simple falta de demanda.
+    # Penalización contextual para evitar falsos positivos en valores débiles
     if rs_rank < 50:
         score *= 0.75
     if not above_ma50:
@@ -311,8 +308,8 @@ def calc_dry_metrics(close, volume, rs_rank, above_ma50, lookback=10):
     return dry_days, round(float(np.clip(score, 0.0, 100.0)), 1)
 
 
-def calc_selling_climax(close, volume, lookback=10):
-    """Detecta una posible capitulación reciente: caída fuerte y volumen excepcional."""
+def calc_selling_climax(close, volume):
+    cfg = STRATEGY_CONFIG
     frame = _aligned_market_data(close, volume)
     if len(frame) < 60:
         return False, None
@@ -323,15 +320,14 @@ def calc_selling_climax(close, volume, lookback=10):
     vol_ma50 = v.rolling(50).mean()
     rel_volume = v / vol_ma50
 
-    recent = pd.DataFrame({"ret": returns, "rv": rel_volume}).iloc[-lookback:]
-    hits = recent[(recent["ret"] <= -0.04) & (recent["rv"] >= 1.80)]
+    recent = pd.DataFrame({"ret": returns, "rv": rel_volume}).iloc[-10:]
+    hits = recent[(recent["ret"] <= -0.04) & (recent["rv"] >= cfg["climax_vol_mult"])]
     if hits.empty:
         return False, None
     return True, hits.index[-1].date().isoformat()
 
 
 def calc_vcp_score(close, volume):
-    """Score 0-100 de contracción reciente de volatilidad, rango y volumen."""
     frame = _aligned_market_data(close, volume)
     if len(frame) < 80:
         return 0.0
@@ -360,7 +356,7 @@ def calc_vcp_score(close, volume):
 
 def classify_signal(last, ma50, ma200, rs_rank, dry_score, vcp_score,
                     distribution20, accumulation20, selling_climax):
-    """Clasifica el estado. Es una señal de cribado, no una orden de compra/venta."""
+    cfg = STRATEGY_CONFIG
     below_ma50 = not math.isnan(ma50) and last < ma50
     below_ma200 = not math.isnan(ma200) and last < ma200
     above_ma50 = not math.isnan(ma50) and last > ma50
@@ -369,7 +365,7 @@ def classify_signal(last, ma50, ma200, rs_rank, dry_score, vcp_score,
         return "BREAKDOWN"
     if distribution20 >= 5 and distribution20 >= accumulation20 + 2:
         return "DISTRIBUTION"
-    if above_ma50 and rs_rank >= 70 and dry_score >= 55 and vcp_score >= 50 and distribution20 <= 3:
+    if above_ma50 and rs_rank >= cfg["min_rs_rating"] and dry_score >= 55 and vcp_score >= 50 and distribution20 <= 3:
         return "VCP"
     if selling_climax and dry_score >= 35 and distribution20 <= 4 and not below_ma200:
         return "PULLBACK"
@@ -394,121 +390,128 @@ def compute(closes, vols, universe):
     # --- pass 1: estadísticos de momentum ---
     stat = {}
     for c in valid:
-        s = px[c].dropna()
-        r1, r3, r6, r12 = ret(s, 21), ret(s, 63), ret(s, 126), ret(s, 252)
-        blended = np.nansum([0.2 * r1, 0.4 * r3, 0.2 * r6, 0.2 * r12])
-        stat[c] = {"r1": r1, "r3": r3, "r6": r6, "r12": r12, "blended": blended}
+        try:
+            s = px[c].dropna()
+            r1, r3, r6, r12 = ret(s, 21), ret(s, 63), ret(s, 126), ret(s, 252)
+            blended = np.nansum([0.2 * r1, 0.4 * r3, 0.2 * r6, 0.2 * r12])
+            stat[c] = {"r1": r1, "r3": r3, "r6": r6, "r12": r12, "blended": blended}
+        except Exception:
+            continue
     st = pd.DataFrame(stat).T
 
     def rank99(col):
+        if col not in st.columns or st.empty:
+            return pd.Series(1, index=st.index)
         return (st[col].rank(pct=True) * 98 + 1).round().fillna(1).astype(int)
 
     rs, rs1, rs3, rs6, rs12 = (rank99("blended"), rank99("r1"), rank99("r3"),
                                rank99("r6"), rank99("r12"))
 
-    # --- pass 2: filas ---
+    # --- pass 2: filas con protección de errores individuales ---
     umap = {u["sym"]: u for u in universe}
     bench_out = [round(float(x), 4) for x in bench.iloc[-OUT_POINTS:].tolist()]
     rows = []
+    
     for c in valid:
-        s = px[c].dropna()
-        u = umap[c]
-        last = float(s.iloc[-1])
-        prev = float(s.iloc[-2]) if len(s) > 1 else last
-        chg = (last / prev - 1) * 100
-        ma50 = float(s.rolling(50).mean().iloc[-1]) if len(s) >= 50 else np.nan
-        ma200 = float(s.rolling(200).mean().iloc[-1]) if len(s) >= 200 else np.nan
-        ma200p = float(s.rolling(200).mean().iloc[-21]) if len(s) >= 221 else np.nan
-        win = s.iloc[-252:]
-        hi, lo = float(win.max()), float(win.min())
-        pfh, pfl = (last / hi - 1) * 100, (last / lo - 1) * 100
-        
-        v = vols.get(c)
-        rv = (float(v.iloc[-1] / v.iloc[-50:].mean())
-              if (v is not None and v.shape[0] >= 50 and v.iloc[-50:].mean() > 0) else np.nan)
-        
-        R = int(rs[c])
-        above_ma50 = (not math.isnan(ma50)) and last > ma50
+        try:
+            s = px[c].dropna()
+            u = umap[c]
+            last = float(s.iloc[-1])
+            prev = float(s.iloc[-2]) if len(s) > 1 else last
+            chg = (last / prev - 1) * 100
+            ma50 = float(s.rolling(50).mean().iloc[-1]) if len(s) >= 50 else np.nan
+            ma200 = float(s.rolling(200).mean().iloc[-1]) if len(s) >= 200 else np.nan
+            ma200p = float(s.rolling(200).mean().iloc[-21]) if len(s) >= 221 else np.nan
+            win = s.iloc[-252:]
+            hi, lo = float(win.max()), float(win.min())
+            pfh, pfl = (last / hi - 1) * 100, (last / lo - 1) * 100
+            
+            v = vols.get(c)
+            rv = (float(v.iloc[-1] / v.iloc[-50:].mean())
+                  if (v is not None and v.shape[0] >= 50 and v.iloc[-50:].mean() > 0) else np.nan)
+            
+            R = int(rs.get(c, 1))
+            above_ma50 = (not math.isnan(ma50)) and last > ma50
 
-        distribution20 = 0
-        accumulation20 = 0
-        dry_days = 0
-        dry_score = 0.0
-        vcp_score = 0.0
-        selling_climax = False
-        selling_climax_date = None
+            distribution20, accumulation20 = 0, 0
+            dry_days = 0
+            dry_score = 0.0
+            vcp_score = 0.0
+            selling_climax = False
+            selling_climax_date = None
 
-        if v is not None:
-            distribution20, accumulation20 = calc_flow_days(s, v, lookback=20)
-            dry_days, dry_score = calc_dry_metrics(
-                s, v, rs_rank=R, above_ma50=above_ma50, lookback=10
+            if v is not None:
+                distribution20, accumulation20 = calc_flow_days(s, v)
+                dry_days, dry_score = calc_dry_metrics(
+                    s, v, rs_rank=R, above_ma50=above_ma50
+                )
+                vcp_score = calc_vcp_score(s, v)
+                selling_climax, selling_climax_date = calc_selling_climax(s, v)
+
+            signal = classify_signal(
+                last=last,
+                ma50=ma50,
+                ma200=ma200,
+                rs_rank=R,
+                dry_score=dry_score,
+                vcp_score=vcp_score,
+                distribution20=distribution20,
+                accumulation20=accumulation20,
+                selling_climax=selling_climax,
             )
-            vcp_score = calc_vcp_score(s, v)
-            selling_climax, selling_climax_date = calc_selling_climax(s, v, lookback=10)
 
-        signal = classify_signal(
-            last=last,
-            ma50=ma50,
-            ma200=ma200,
-            rs_rank=R,
-            dry_score=dry_score,
-            vcp_score=vcp_score,
-            distribution20=distribution20,
-            accumulation20=accumulation20,
-            selling_climax=selling_climax,
-        )
+            flow_balance = accumulation20 - distribution20
+            institutional_score = (
+                0.30 * dry_score
+                + 0.25 * vcp_score
+                + 0.20 * R
+                + 2.5 * flow_balance
+            )
+            institutional_score = round(float(np.clip(institutional_score, 0.0, 100.0)), 1)
 
-        flow_balance = accumulation20 - distribution20
-        institutional_score = (
-            0.30 * dry_score
-            + 0.25 * vcp_score
-            + 0.20 * R
-            + 2.5 * flow_balance
-        )
-        institutional_score = round(float(np.clip(institutional_score, 0.0, 100.0)), 1)
+            c1 = (not math.isnan(ma50)) and last > ma50
+            c2 = (not math.isnan(ma50)) and (not math.isnan(ma200)) and ma50 > ma200
+            c3 = (not math.isnan(ma200)) and (not math.isnan(ma200p)) and ma200 > ma200p
+            c4 = (not math.isnan(pfh)) and pfh >= -25
+            c5 = (not math.isnan(pfl)) and pfl >= 30
+            c6 = R >= STRATEGY_CONFIG["min_rs_rating"]
+            
+            crit = [
+                {"ok": bool(c1), "tx": "Precio sobre la MA50", "vx": f"{last:.2f} / {ma50:.2f}" if not math.isnan(ma50) else "—"},
+                {"ok": bool(c2), "tx": "MA50 sobre MA200", "vx": f"{ma50:.2f} / {ma200:.2f}" if not math.isnan(ma200) else "—"},
+                {"ok": bool(c3), "tx": "MA200 inclinada al alza", "vx": "sí" if c3 else "no"},
+                {"ok": bool(c4), "tx": "A < 25% del máximo de 52s", "vx": f"{pfh:.1f}%"},
+                {"ok": bool(c5), "tx": "A > 30% del mínimo de 52s", "vx": f"+{pfl:.0f}%"},
+                {"ok": bool(c6), "tx": f"RS Rating ≥ {STRATEGY_CONFIG['min_rs_rating']}", "vx": str(R)},
+            ]
+            cnt = sum(1 for x in crit if x["ok"])
+            pser = px[c].ffill().bfill()
+            
+            rows.append({
+                "sym": c, "t": u["t"], "n": u["n"], "idx": u["idx"], "sec": u["sec"],
+                "rs": R, "rs1m": int(rs1.get(c, 1)), "rs3m": int(rs3.get(c, 1)),
+                "rs6m": int(rs6.get(c, 1)), "rs12m": int(rs12.get(c, 1)),
+                "px": round(last, 2), "chg": round(chg, 2),
+                "rv": round(rv, 2) if not math.isnan(rv) else 1.0,
+                "dryDays10": int(dry_days),
+                "heavyDays10": int(distribution20),
+                "distribution20": int(distribution20),
+                "accumulation20": int(accumulation20),
+                "flowBalance20": int(flow_balance),
+                "dryScore": dry_score,
+                "vcpScore": vcp_score,
+                "sellingClimax": bool(selling_climax),
+                "sellingClimaxDate": selling_climax_date,
+                "institutionalScore": institutional_score,
+                "signal": signal,
+                "pctFromHigh": round(pfh, 2), "pctFromLow": round(pfl, 2),
+                "trendCount": cnt, "trendOK": cnt == 6, "crit": crit,
+                "prices": [round(float(x), 4) for x in pser.iloc[-OUT_POINTS:].tolist()],
+            })
+        except Exception as e:
+            print(f"  ! Error procesando métricas para {c}: {e}")
+            continue
 
-
-
-        c1 = (not math.isnan(ma50)) and last > ma50
-        c2 = (not math.isnan(ma50)) and (not math.isnan(ma200)) and ma50 > ma200
-        c3 = (not math.isnan(ma200)) and (not math.isnan(ma200p)) and ma200 > ma200p
-        c4 = (not math.isnan(pfh)) and pfh >= -25
-        c5 = (not math.isnan(pfl)) and pfl >= 30
-        c6 = R >= 70
-        crit = [
-            {"ok": bool(c1), "tx": "Precio sobre la MA50",
-             "vx": f"{last:.2f} / {ma50:.2f}" if not math.isnan(ma50) else "—"},
-            {"ok": bool(c2), "tx": "MA50 sobre MA200",
-             "vx": f"{ma50:.2f} / {ma200:.2f}" if not math.isnan(ma200) else "—"},
-            {"ok": bool(c3), "tx": "MA200 inclinada al alza", "vx": "sí" if c3 else "no"},
-            {"ok": bool(c4), "tx": "A < 25% del máximo de 52s", "vx": f"{pfh:.1f}%"},
-            {"ok": bool(c5), "tx": "A > 30% del mínimo de 52s", "vx": f"+{pfl:.0f}%"},
-            {"ok": bool(c6), "tx": "RS Rating ≥ 70", "vx": str(R)},
-        ]
-        cnt = sum(1 for x in crit if x["ok"])
-        pser = px[c].ffill().bfill()
-        rows.append({
-            "sym": c, "t": u["t"], "n": u["n"], "idx": u["idx"], "sec": u["sec"],
-            "rs": R, "rs1m": int(rs1[c]), "rs3m": int(rs3[c]),
-            "rs6m": int(rs6[c]), "rs12m": int(rs12[c]),
-            "px": round(last, 2), "chg": round(chg, 2),
-            "rv": round(rv, 2) if not math.isnan(rv) else 1.0,
-            # Compatibilidad con la interfaz actual y métricas nuevas.
-            "dryDays10": int(dry_days),
-            "heavyDays10": int(distribution20),
-            "distribution20": int(distribution20),
-            "accumulation20": int(accumulation20),
-            "flowBalance20": int(flow_balance),
-            "dryScore": dry_score,
-            "vcpScore": vcp_score,
-            "sellingClimax": bool(selling_climax),
-            "sellingClimaxDate": selling_climax_date,
-            "institutionalScore": institutional_score,
-            "signal": signal,
-            "pctFromHigh": round(pfh, 2), "pctFromLow": round(pfl, 2),
-            "trendCount": cnt, "trendOK": cnt == 6, "crit": crit,
-            "prices": [round(float(x), 4) for x in pser.iloc[-OUT_POINTS:].tolist()],
-        })
     rows.sort(key=lambda r: (r["institutionalScore"], r["rs"]), reverse=True)
     return rows, bench_out
 
@@ -533,7 +536,7 @@ def main():
     ap = argparse.ArgumentParser(description="Pipeline de datos DeepView (Yahoo Finance)")
     ap.add_argument("--no-us-wiki", action="store_true", help="usa lista US curada en vez de Wikipedia")
     ap.add_argument("--selftest", action="store_true", help="sin red: precios sintéticos para validar")
-    ap.add_argument("--out", default="feed.js", help="ruta de salida del .js (def. feed.js)")
+    ap.add_argument("--out", default="feed.js", help="ruta de salida del .js")
     a = ap.parse_args()
 
     print("DeepView · pipeline de datos\n" + "-" * 32)
@@ -546,7 +549,7 @@ def main():
         print("Modo selftest: precios sintéticos (sin Yahoo).")
         closes, vols = synth_prices(uni)
     else:
-        print("Descargando de Yahoo Finance (la primera vez puede tardar varios minutos)…")
+        print("Descargando de Yahoo Finance…")
         closes, vols = download([u["sym"] for u in uni])
 
     if not closes:
@@ -562,7 +565,7 @@ def main():
     print("Top 5 institucional:", ", ".join(
         f"{r['t']}({r['institutionalScore']}, {r['signal']})" for r in rows[:5]
     ))
-    print("\nListo. Abre deepview_acciones.html (debe estar en la misma carpeta que feed.js).")
+    print("\nListo. Abre deepview_acciones.html.")
 
 
 if __name__ == "__main__":
