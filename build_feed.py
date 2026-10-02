@@ -308,21 +308,22 @@ def compute(closes, vols, universe):
                     dry_days += 1
         # -------------------------------------------------------------
 
-        # -------------------------------------------------------------
-        # MÉTRICA DE DISTRIBUCIÓN INSTITUCIONAL (Equilibrio: Ventana 10 sesiones, umbral razonable)
+       # -------------------------------------------------------------
+        # MÉTRICA DE DISTRIBUCIÓN INSTITUCIONAL (Caída acumulada de 3 sesiones)
         # -------------------------------------------------------------
         heavy_days_count = 0
-        if v is not None and len(v) >= 50 and len(s) >= 10:
-            v_last10 = v.iloc[-10:]
-            v_ma50_10 = v.rolling(50).mean().iloc[-10:]
-            rel_vols_10 = v_last10 / v_ma50_10
-            ret_last10 = s.iloc[-10:].pct_change()
+        if v is not None and len(v) >= 50 and len(s) >= 5:
+            v_last5 = v.iloc[-5:]
+            v_ma50_5 = v.rolling(50).mean().iloc[-5:]
+            rel_vols_5 = v_last5 / v_ma50_5
             
-            for i in range(len(rel_vols_10)):
-                # Exigimos volumen superior al 30% de la media (1.3) y caída del día > 0.8% (-0.008)
-                if rel_vols_10.iloc[i] > 1.3 and ret_last10.iloc[i] < -0.008:
-                    heavy_days_count += 1
-        # -------------------------------------------------------------
+            # Retorno acumulado de los últimos 3 días (o cambio de 3 sesiones)
+            ret_3d = s.pct_change(periods=3).iloc[-1]
+            
+            # Si hay volumen institucional reciente y la caída acumulada en 3 sesiones es mayor al -1.5% (-0.015)
+            # (puedes ajustar este umbral si prefieres -0.02 para -2%)
+            if rel_vols_5.iloc[-1] > 1.3 and ret_3d < -0.015:
+                heavy_days_count = 3  # Pinta 3 gotas para reflejar el bloque de distribución acumulado
 
         R = int(rs[c])
 
