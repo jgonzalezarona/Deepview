@@ -606,15 +606,22 @@ function rsColor(rs){const c=rsRGB(rs);return `rgb(${c[0]},${c[1]},${c[2]})`;}
 function chgClass(v){return v>0.001?"pos":v<-0.001?"neg":"dim";}
 function chgStr(v){return (v>0?"+":"")+v.toFixed(1)+"%";}
 
-// LOGICA VISUAL VCP / DISTRIBUCIÓN
+// LÓGICA VISUAL VCP / DISTRIBUCIÓN
 function vcpCell(r){
   if(r.heavyDays10 && r.heavyDays10 >= 3){
-    const drops = "💧".repeat(r.heavyDays10);
-    return `<span style="color:var(--red); font-size:12px; letter-spacing:1px;" title="¡Alerta! ${r.heavyDays10} días de distribución institucional en 15 sesiones">${drops} ⚠️</span>`;
+    // Iconos de gotas en rojo usando un SVG inline pequeño para forzar el color
+    let drops = '';
+    for(let i=0; i<r.heavyDays10; i++){
+      drops += `<svg width="10" height="13" viewBox="0 0 24 24" fill="#F2655C" style="margin-right:1px;"><path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z"/></svg>`;
+    }
+    return `<span style="display:inline-flex; align-items:center;" title="¡Alerta! ${r.heavyDays10} días de distribución institucional en 15 sesiones">${drops} ⚠️</span>`;
   }
   if(r.dryDays10 && r.dryDays10 > 0){
-    const drops = "💧".repeat(r.dryDays10);
-    return `<span style="color:var(--blue); font-size:12px; letter-spacing:1px;" title="${r.dryDays10} días consecutivos de secado de oferta (VCP)">${drops}</span>`;
+    let drops = '';
+    for(let i=0; i<r.dryDays10; i++){
+      drops += `<svg width="10" height="13" viewBox="0 0 24 24" fill="#5CA8FF" style="margin-right:1px;"><path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z"/></svg>`;
+    }
+    return `<span style="display:inline-flex; align-items:center;" title="${r.dryDays10} días consecutivos de secado de oferta (VCP)">${drops}</span>`;
   }
   return '<span style="color:var(--dim)">-</span>';
 }
