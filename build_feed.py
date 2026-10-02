@@ -308,23 +308,34 @@ def compute(closes, vols, universe):
                     dry_days += 1
         # -------------------------------------------------------------
 
-       # -------------------------------------------------------------
-        # MÉTRICA DE DISTRIBUCIÓN INSTITUCIONAL (Caída acumulada de 3 sesiones)
+      # -------------------------------------------------------------
+        # MÉTRICA DE DISTRIBUCIÓN INSTITUCIONAL (Escala Progresiva Acumulada)
+        # Regla:
+        # - 1 gota: si en la sesión anterior cae hasta un -5% (-0.05) con volumen
+        # - 2 gotas: si en las 2 últimas sesiones acumula hasta un -8% (-0.08) con volumen
+        # - 3 gotas: si en las 3 últimas sesiones acumula hasta un -10% (-0.10) con volumen
+        # - A partir de ahí, 1 gota adicional por cada -5% adicional acumulado.
         # -------------------------------------------------------------
         heavy_days_count = 0
-        if v is not None and len(v) >= 50 and len(s) >= 5:
-            v_last5 = v.iloc[-5:]
-            v_ma50_5 = v.rolling(50).mean().iloc[-5:]
-            rel_vols_5 = v_last5 / v_ma50_5
+        if v is not None and len(v) >= 50 and len(s) >= 4:
+            # Comprobamos si hay volumen elevado reciente (> 30% sobre su media de 50)
+            vol_reciente = (v.iloc[-1] / v.rolling(50).mean().iloc[-1]) > 1.3
             
-            # Retorno acumulado de los últimos 3 días (o cambio de 3 sesiones)
-            ret_3d = s.pct_change(periods=3).iloc[-1]
-            
-            # Si hay volumen institucional reciente y la caída acumulada en 3 sesiones es mayor al -1.5% (-0.015)
-            # (puedes ajustar este umbral si prefieres -0.02 para -2%)
-            if rel_vols_5.iloc[-1] > 1.3 and ret_3d < -0.015:
-                heavy_days_count = 3  # Pinta 3 gotas para reflejar el bloque de distribución acumulado
-
+            if vol_reciente:
+                # Retornos acumulados hacia atrás
+                ret_1 = (s.iloc[-1] / s.iloc[-2]) - 1.0  # Sesión anterior (1 día)
+                ret_2 = (s.iloc[-1] / s.iloc[-3]) - 1.0  # Últimas 2 sesiones
+                ret_3 = (s.iloc[-1] / s.iloc[-4]) - 1.0  # Últimas 3 sesiones
+                
+                if ret_3 <= -0.10:
+                    # 3 gotas base por llegar al -10%, más 1 gota extra por cada -5% adicional
+                    exceso = abs(ret_3) - 0.10
+                    heavy_days_count = 3 + int(exceso // 0.05)
+                elif ret_2 <= -0.08:
+                    heavy_days_count = 2
+                elif ret_1 <= -0.05:
+                    heavy_days_count = 1
+        # -------------------------------------------------------------
         R = int(rs[c])
 
         c1 = (not math.isnan(ma50)) and last > ma50
