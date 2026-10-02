@@ -2,16 +2,27 @@
 """
 DeepView · Acciones — pipeline de datos (Yahoo Finance)
 =======================================================
-Versión optimizada v3.9 (Multi-index, cierres seguros, protección de volumen y redondeo a ventana programada local - CORREGIDO)
+Descarga OHLCV ajustado del universo (IBEX 35, S&P 500, Nasdaq-100, Europa),
+calcula el RS Rating cross-sectional (percentil vs todo el universo) y la
+plantilla de tendencia, y genera feed.js (+ feed.json) que consume
+deepview_acciones.html.
+
+El RS percentil se calcula SOBRE ESTE UNIVERSO: cuantos más valores, más
+significativo. Amplía las listas IBEX/EUROPE o usa Wikipedia (por defecto)
+para los constituyentes US completos.
+
+Uso:
+  python build_feed.py                 # universo completo (S&P/Nasdaq desde Wikipedia)
+  python build_feed.py --no-us-wiki    # lista US curada (~65 valores, más rápido)
+  python build_feed.py --selftest      # SIN red: precios sintéticos para validar
 """
 
 import argparse, json, sys, time, math
 import datetime as dt
-import requests
+import urllib.request
 from io import StringIO
 import numpy as np
 import pandas as pd
-from zoneinfo import ZoneInfo
 
 OUT_POINTS = 380      # nº de sesiones que se mandan al gráfico (para MA200 completa)
 MIN_HISTORY = 252     # mínimo de sesiones para entrar en el ranking
@@ -26,7 +37,7 @@ GICS_ES = {
     "Utilities": "Utilities", "Real Estate": "Inmobiliario",
 }
 
-# --- IBEX 35 ---
+# --- IBEX 35 (símbolos Yahoo con sufijo .MC) ---
 IBEX = {
     "SAN.MC": ("Banco Santander", "Financiero"), "BBVA.MC": ("BBVA", "Financiero"),
     "ITX.MC": ("Inditex", "Consumo discr."), "IBE.MC": ("Iberdrola", "Utilities"),
@@ -48,7 +59,7 @@ IBEX = {
     "SCYR.MC": ("Sacyr", "Industrial"),
 }
 
-# --- Europa ---
+# --- Europa (blue chips líquidos, símbolos Yahoo con sufijo de mercado) ---
 EUROPE = {
     "ASML.AS": ("ASML Holding", "Tecnología"), "ADYEN.AS": ("Adyen", "Tecnología"),
     "SAP.DE": ("SAP", "Tecnología"), "SIE.DE": ("Siemens", "Industrial"),
@@ -75,7 +86,7 @@ EUROPE = {
     "INVE-B.ST": ("Investor AB", "Financiero"), "VOLV-B.ST": ("Volvo", "Industrial"),
 }
 
-# --- Respaldo US ---
+# --- Respaldo US (si falla Wikipedia) ---  symbol: (name, sector, idx)
 FALLBACK_US = {
     "NVDA": ("NVIDIA", "Tecnología", "NDX"), "AAPL": ("Apple", "Tecnología", "NDX"),
     "MSFT": ("Microsoft", "Tecnología", "NDX"), "AMZN": ("Amazon", "Consumo discr.", "NDX"),
@@ -111,15 +122,21 @@ FALLBACK_US = {
     "UNP": ("Union Pacific", "Industrial", "SP500"),
 }
 
+
 def _wiki_tables(url):
-    headers = {
+    """Descarga una pagina de Wikipedia con User-Agent de navegador y devuelve sus tablas.
+    Wikipedia bloquea peticiones sin User-Agent (HTTP 403); por eso no basta pd.read_html(url)."""
+    req = urllib.request.Request(url, headers={
         "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36")
-    }
-    res = requests.get(url, headers=headers, timeout=30)
-    return pd.read_html(StringIO(res.text))
+    })
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        html = resp.read().decode("utf-8", "replace")
+    return pd.read_html(StringIO(html))
+
 
 def wiki_us():
+    """Constituyentes S&P 500 + Nasdaq-100 desde Wikipedia (ticker, nombre, sector)."""
     out = {}
     try:
         sp = _wiki_tables("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")[0]
@@ -132,6 +149,7 @@ def wiki_us():
         return None
     try:
         for t in _wiki_tables("https://en.wikipedia.org/wiki/Nasdaq-100"):
+            cols = [str(c) for c in t.columns]
             symcol = next((c for c in t.columns if str(c) in ("Ticker", "Symbol")), None)
             namecol = next((c for c in t.columns if "Compan" in str(c)), None)
             seccol = next((c for c in t.columns if "Sector" in str(c) or "GICS" in str(c)), None)
@@ -143,17 +161,19 @@ def wiki_us():
                     continue
                 nm = str(r[namecol]).strip()
                 sec = str(r[seccol]).strip() if seccol else out.get(sym, ("", "—"))[1]
-                out[sym] = (nm, GICS_ES.get(sec, sec or "—"), "NDX")
+                out[sym] = (nm, GICS_ES.get(sec, sec or "—"), "NDX")  # Nasdaq-100 manda en la etiqueta
             break
     except Exception as e:
         print(f"  ! Nasdaq-100 desde Wikipedia falló (sigo con S&P 500): {e}")
     return out
+
 
 def build_universe(use_wiki):
     us = wiki_us() if use_wiki else None
     if not us:
         if use_wiki:
             print("  [AVISO] No pude leer Wikipedia; uso la lista US curada (~65).")
+            print("          El total sera ~145, NO ~600. Revisa tu conexion y reintenta.")
         us = FALLBACK_US
     uni, seen = [], set()
 
@@ -171,49 +191,43 @@ def build_universe(use_wiki):
         add(sym, sym.split(".")[0], nm, sec, "EU")
     return uni
 
+
 def download(symbols):
     import yfinance as yf
     allsyms = symbols + [BENCHMARK["symbol"]]
     closes, vols = {}, {}
-    
     for i in range(0, len(allsyms), CHUNK):
         chunk = allsyms[i:i + CHUNK]
         print(f"  · {i + 1}–{min(i + CHUNK, len(allsyms))} / {len(allsyms)}…")
         df = None
         for attempt in range(3):
             try:
-                df = yf.download(chunk, period="2y", interval="1d", 
+                df = yf.download(chunk, period="2y", interval="1d", auto_adjust=True,
                                  group_by="ticker", threads=True, progress=False)
                 break
             except Exception as e:
                 print(f"    reintento {attempt + 1}: {e}")
                 time.sleep(2)
-                
         if df is None or df.empty:
+            print("    lote vacío, salto.")
             continue
-            
         for s in chunk:
             try:
-                if len(chunk) == 1:
-                    sub = df
-                else:
-                    sub = df[s] if s in df.columns.get_level_values(0) else None
-                    
+                sub = df if len(chunk) == 1 else (df[s] if s in df.columns.get_level_values(0) else None)
                 if sub is None or sub.empty:
                     continue
-                
-                c_col = "Adj Close" if "Adj Close" in sub.columns else "Close"
-                c = sub[c_col].dropna()
-                v = sub["Volume"].dropna() if "Volume" in sub.columns else pd.Series(dtype=float)
-                
+                c = sub["Close"].dropna()
+                v = sub["Volume"].dropna()
                 if c.shape[0] >= 60:
                     closes[s], vols[s] = c, v
             except Exception:
                 continue
-        time.sleep(0.5)
+        time.sleep(1)
     return closes, vols
 
+
 def synth_prices(universe):
+    """Precios sintéticos para --selftest (sin red)."""
     rng = np.random.default_rng(42)
     idx = pd.bdate_range(end=dt.date.today(), periods=504)
     days = len(idx)
@@ -225,23 +239,25 @@ def synth_prices(universe):
         vols[s] = pd.Series(rng.uniform(1e6, 6e6, days), index=idx)
     return closes, vols
 
+
 def ret(s, k):
     return float(s.iloc[-1] / s.iloc[-1 - k] - 1.0) if len(s) > k else np.nan
+
 
 def compute(closes, vols, universe):
     bsym = BENCHMARK["symbol"]
     if bsym not in closes:
-        print("  ! Sin datos del benchmark; uso el primer valor como reference.")
+        print("  ! Sin datos del benchmark; uso el primer valor como referencia.")
         bsym = next(iter(closes))
     bench = closes[bsym].dropna()
     common = bench.index
 
     px = pd.DataFrame({u["sym"]: closes[u["sym"]] for u in universe if u["sym"] in closes})
-    px = px.reindex(common).ffill(limit=5).bfill(limit=5)
-    
+    px = px.reindex(common).ffill(limit=3)
     valid = [c for c in px.columns if px[c].dropna().shape[0] >= MIN_HISTORY]
     print(f"  · {len(valid)} valores con histórico suficiente (≥{MIN_HISTORY} sesiones).")
 
+    # --- pass 1: estadísticos de momentum ---
     stat = {}
     for c in valid:
         s = px[c].dropna()
@@ -256,11 +272,13 @@ def compute(closes, vols, universe):
     rs, rs1, rs3, rs6, rs12 = (rank99("blended"), rank99("r1"), rank99("r3"),
                                rank99("r6"), rank99("r12"))
 
+    # --- pass 2: filas ---
+    umap = {u["sym"]: u for u in universe}
     bench_out = [round(float(x), 4) for x in bench.iloc[-OUT_POINTS:].tolist()]
     rows = []
     for c in valid:
         s = px[c].dropna()
-        u = {u["sym"]: u for u in universe}[c]
+        u = umap[c]
         last = float(s.iloc[-1])
         prev = float(s.iloc[-2]) if len(s) > 1 else last
         chg = (last / prev - 1) * 100
@@ -271,15 +289,33 @@ def compute(closes, vols, universe):
         hi, lo = float(win.max()), float(win.min())
         pfh, pfl = (last / hi - 1) * 100, (last / lo - 1) * 100
         
-        v = vols.get(c, pd.Series(dtype=float)).reindex(common, fill_value=0).fillna(1.0)
-        v_mean = v.iloc[-50:].mean()
+        v = vols.get(c)
+        rv = (float(v.iloc[-1] / v.iloc[-50:].mean())
+              if (v is not None and v.shape[0] >= 50 and v.iloc[-50:].mean() > 0) else np.nan)
         
-        if v.shape[0] >= 50 and v_mean > 0:
-            last_vol = v.iloc[-1]
-            rv = float(last_vol / v_mean) if not (math.isnan(last_vol) or math.isnan(v_mean)) else 1.0
-        else:
-            rv = 1.0
+        # -------------------------------------------------------------
+        # INYECCIÓN DEL SETUP VCP: Cálculo de Días Secos (10 días)
+        # -------------------------------------------------------------
+        dry_days = 0
+        if v is not None and len(v) >= 50 and len(s) >= 11:
+            # Seleccionamos los últimos 10 días de volumen
+            v_last10 = v.iloc[-10:]
+            # Calculamos la media de 50 sesiones para cada uno de esos 10 días
+            v_ma50 = v.rolling(50).mean().iloc[-10:]
+            # Calculamos el Ratio de Volumen para esos 10 días
+            rel_vols = v_last10 / v_ma50
             
+            # Calculamos la variación absoluta diaria del cierre (necesitamos 11 días para 10 retornos)
+            ret_last10 = s.iloc[-11:].pct_change().dropna().abs()
+            
+            for i in range(len(rel_vols)):
+                # REGLA DE CONTRACCIÓN MINERVINI:
+                # 1. Volumen Relativo menor al 60% (0.6)
+                # 2. Cierre diario apenas se mueve (variación menor al 1.5% o 0.015)
+                if rel_vols.iloc[i] < 0.6 and ret_last10.iloc[i] < 0.015:
+                    dry_days += 1
+        # -------------------------------------------------------------
+
         R = int(rs[c])
 
         c1 = (not math.isnan(ma50)) and last > ma50
@@ -299,45 +335,25 @@ def compute(closes, vols, universe):
             {"ok": bool(c6), "tx": "RS Rating ≥ 70", "vx": str(R)},
         ]
         cnt = sum(1 for x in crit if x["ok"])
-        pser = s.ffill().bfill()
+        pser = px[c].ffill().bfill()
         rows.append({
             "sym": c, "t": u["t"], "n": u["n"], "idx": u["idx"], "sec": u["sec"],
             "rs": R, "rs1m": int(rs1[c]), "rs3m": int(rs3[c]),
             "rs6m": int(rs6[c]), "rs12m": int(rs12[c]),
             "px": round(last, 2), "chg": round(chg, 2),
-            "rv": round(rv, 2) if not (math.isnan(rv) or math.isinf(rv)) else 1.0,
+            "rv": round(rv, 2) if not math.isnan(rv) else 1.0,
+            "dryDays10": int(dry_days), # <--- AQUÍ SE AÑADE AL JSON
             "pctFromHigh": round(pfh, 2), "pctFromLow": round(pfl, 2),
             "trendCount": cnt, "trendOK": cnt == 6, "crit": crit,
-            "prices": [round(float(x), 4) for x in pser.iloc[-OUT_POINTS:].dropna().tolist()],
+            "prices": [round(float(x), 4) for x in pser.iloc[-OUT_POINTS:].tolist()],
         })
     rows.sort(key=lambda r: r["rs"], reverse=True)
     return rows, bench_out
 
+
 def write(rows, bench_out, path_js, path_json):
-    ventanas_horarias = [
-        "09:00", "10:30", "12:00", "14:00", "15:30", 
-        "17:00", "18:30", "20:00", "21:30", "23:00"
-    ]
-    
-    tz_madrid = ZoneInfo("Europe/Madrid")
-    ahora = dt.datetime.now(tz_madrid)
-    minutos_ahora = ahora.hour * 60 + ahora.minute
-    
-    ventana_elegida = ventanas_horarias[0]
-    min_diff = float('inf')
-    for v in ventanas_horarias:
-        h, m = map(int, v.split(":"))
-        minutos_v = h * 60 + m
-        diff = abs(minutos_ahora - minutos_v)
-        if diff < min_diff:
-            min_diff = diff
-            ventana_elegida = v
-
-    # CORREGIDO: Variable única e inequívoca en español para el cálculo limpio
-    timestamp_oficial = f"{ahora.strftime('%Y-%m-%d')} {ventana_elegida}"
-
     feed = {
-        "generatedAt": timestamp_oficial,
+        "generatedAt": dt.date.today().isoformat(),
         "benchmark": BENCHMARK["label"],
         "benchmarkPrices": bench_out,
         "universeSize": len(rows),
@@ -349,6 +365,7 @@ def write(rows, bench_out, path_js, path_json):
     with open(path_json, "w", encoding="utf-8") as f:
         json.dump(feed, f, ensure_ascii=False, separators=(",", ":"))
     print(f"  ✓ {path_js} ({len(js) / 1e6:.2f} MB) y {path_json} escritos · {len(rows)} valores.")
+
 
 def main():
     ap = argparse.ArgumentParser(description="Pipeline de datos DeepView (Yahoo Finance)")
@@ -367,7 +384,7 @@ def main():
         print("Modo selftest: precios sintéticos (sin Yahoo).")
         closes, vols = synth_prices(uni)
     else:
-        print("Descargando de Yahoo Finance…")
+        print("Descargando de Yahoo Finance (la primera vez puede tardar varios minutos)…")
         closes, vols = download([u["sym"] for u in uni])
 
     if not closes:
@@ -381,6 +398,7 @@ def main():
     tok = sum(1 for r in rows if r["trendOK"])
     print(f"Resumen: {len(rows)} valores · {led} líderes (RS≥80) · {tok} con plantilla OK.")
     print("Top 5 por RS:", ", ".join(f"{r['t']}({r['rs']})" for r in rows[:5]))
+    print("\nListo. Abre deepview_acciones.html (debe estar en la misma carpeta que feed.js).")
 
 
 if __name__ == "__main__":
