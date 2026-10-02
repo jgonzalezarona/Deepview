@@ -308,33 +308,31 @@ def compute(closes, vols, universe):
                     dry_days += 1
         # -------------------------------------------------------------
 
-     # -------------------------------------------------------------
-        # MÉTRICA DE DISTRIBUCIÓN INSTITUCIONAL (Escala Progresiva Acumulada Real)
+    # -------------------------------------------------------------
+        # MÉTRICA DE DISTRIBUCIÓN INSTITUCIONAL (Gotas = Días consecutivos bajando con volumen)
         # -------------------------------------------------------------
         heavy_days_count = 0
-        if v is not None and len(v) >= 50 and len(s) >= 4:
+        if v is not None and len(v) >= 50 and len(s) >= 5:
             v_ma50 = v.rolling(50).mean()
+            daily_rets = s.pct_change()
             
-            # Verificamos si en las últimas 3 sesiones ha habido volumen elevado (> 1.3 x MA50) en algún día del tramo
-            rel_vols_3 = v.iloc[-3:] / v_ma50.iloc[-3:]
-            vol_institucional = (rel_vols_3 > 1.3).any()
+            # 1. Contar cuántas sesiones consecutivas cerrando a la baja hay al final
+            consecutive_reds = 0
+            for i in range(1, len(s)):
+                if daily_rets.iloc[-i] < 0:
+                    consecutive_reds += 1
+                else:
+                    break
             
-            if vol_institucional:
-                # Retornos acumulados hacia atrás
-                ret_1 = (s.iloc[-1] / s.iloc[-2]) - 1.0  # Sesión anterior (1 día)
-                ret_2 = (s.iloc[-1] / s.iloc[-3]) - 1.0  # Últimas 2 sesiones acumuladas
-                ret_3 = (s.iloc[-1] / s.iloc[-4]) - 1.0  # Últimas 3 sesiones acumuladas
+            # 2. Si lleva al menos 1 día bajando consecutivamente
+            if consecutive_reds >= 1:
+                # Verificar si en ese tramo de días consecutivos hubo volumen institucional (> 1.3 x MA50)
+                rel_vols_recent = v.iloc[-consecutive_reds:] / v_ma50.iloc[-consecutive_reds:]
+                vol_institucional = (rel_vols_recent > 1.3).any()
                 
-                if ret_3 <= -0.10:
-                    # 3 gotas base por llegar al -10% en 3 sesiones, +1 gota extra por cada -5% adicional
-                    exceso = abs(ret_3) - 0.10
-                    heavy_days_count = 3 + int(exceso // 0.05)
-                elif ret_2 <= -0.08:
-                    # 2 gotas si en las 2 últimas sesiones acumula hasta un -8%
-                    heavy_days_count = 2
-                elif ret_1 <= -0.05:
-                    # 1 gota si en la sesión anterior ha caído hasta un -5%
-                    heavy_days_count = 1
+                if vol_institucional:
+                    # Tantas gotas rojas como días consecutivos lleva bajando
+                    heavy_days_count = int(consecutive_reds)
         # -------------------------------------------------------------
         R = int(rs[c])
 
