@@ -308,28 +308,19 @@ def compute(closes, vols, universe):
                     dry_days += 1
         # -------------------------------------------------------------
 
-      # -------------------------------------------------------------
-        # MÉTRICA SÓLIDA DE DISTRIBUCIÓN INSTITUCIONAL (Filtro de Tendencia / EMA 21)
+        # -------------------------------------------------------------
+        # MÉTRICA DE DISTRIBUCIÓN INSTITUCIONAL (Equilibrio: Ventana 10 sesiones, umbral razonable)
         # -------------------------------------------------------------
         heavy_days_count = 0
-        if v is not None and len(v) >= 50 and len(s) >= 15:
-            v_last15 = v.iloc[-15:]
-            v_ma50_15 = v.rolling(50).mean().iloc[-15:]
-            rel_vols_15 = v_last15 / v_ma50_15
-            ret_last15 = s.iloc[-15:].pct_change()
+        if v is not None and len(v) >= 50 and len(s) >= 10:
+            v_last10 = v.iloc[-10:]
+            v_ma50_10 = v.rolling(50).mean().iloc[-10:]
+            rel_vols_10 = v_last10 / v_ma50_10
+            ret_last10 = s.iloc[-10:].pct_change()
             
-            # Calculamos la EMA 21 de las últimas 15 sesiones para comprobar soporte dinámico
-            ema21_15 = s.ewm(span=21, adjust=False).mean().iloc[-15:]
-            
-            for i in range(len(rel_vols_15)):
-                # REGLA INSTITUCIONAL REAL:
-                # 1. Volumen alto (>40% sobre la media)
-                # 2. Caída seria en el día (>1.5%)
-                # 3. FILTRO CLAVE: El precio del día está POR DEBAJO de su EMA 21 
-                #    (si está por encima, es un pullback alcista saludable, no distribución)
-                if (rel_vols_15.iloc[i] > 1.4 and 
-                    ret_last15.iloc[i] < -0.015 and 
-                    s.iloc[-15+i] < ema21_15.iloc[i]):
+            for i in range(len(rel_vols_10)):
+                # Exigimos volumen superior al 30% de la media (1.3) y caída del día > 0.8% (-0.008)
+                if rel_vols_10.iloc[i] > 1.3 and ret_last10.iloc[i] < -0.008:
                     heavy_days_count += 1
         # -------------------------------------------------------------
 
