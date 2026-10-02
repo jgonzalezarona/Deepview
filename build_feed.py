@@ -23,10 +23,10 @@ BENCHMARK = {"symbol": "ACWI", "label": "ACWI (MSCI All-Country)"}
 # --- CONFIGURACIÓN CENTRALIZADA DE ESTRATEGIA ---
 STRATEGY_CONFIG = {
     "min_rs_rating": 70,           # RS mínimo para plantillas de tendencia / VCP
-    "flow_lookback": 20,           # Ventana para días de acumulación/distribución
-    "min_flow_move": 0.002,        # Movimiento mínimo porcentual para flujo institucional
+    "flow_lookback": 20,           # Ventana para días de acumulación
+    "min_flow_move": 0.002,        # Movimiento mínimo porcentual para acumulación
     "dry_lookback": 10,            # Ventana de sesiones para análisis de volumen seco
-    "dry_vol_threshold": 0.55,     # Umbral de volumen relativo para considerar día seco (más estricto)
+    "dry_vol_threshold": 0.55,     # Umbral de volumen relativo para día seco
     "dry_move_threshold": 0.012,   # Rango de precio máximo permitido en día seco (1.2%)
     "climax_vol_mult": 1.80,       # Multiplicador de volumen para clímax vendedor
 }
@@ -250,23 +250,41 @@ def _aligned_market_data(close, volume):
     return frame[frame["volume"] > 0]
 
 
-def calc_flow_days(close, volume):
+def calc_accumulation_days(close, volume):
     cfg = STRATEGY_CONFIG
     frame = _aligned_market_data(close, volume)
     if len(frame) < cfg["flow_lookback"] + 1:
-        return 0, 0
+        return 0
 
     recent = frame.iloc[-(cfg["flow_lookback"] + 1):]
     returns = recent["close"].pct_change()
     volume_up = recent["volume"] > recent["volume"].shift(1)
+    accumulation = int(((returns >= cfg["min_flow_move"]) & volume_up).sum())
+    return accumulation
 
-    distribution = int(((returns <= -cfg["min_move"]) & volume_up).sum())
-    accumulation = int(((returns >= cfg["min_move"]) & volume_up).sum())
-    return distribution, accumulation
+
+def calc_early_distribution(close, volume, lookback=12):
+    """
+    ALERTA TEMPRANA DE DISTRIBUCIÓN: 
+    Detecta presión vendedora institucional antes de que el valor sufra grandes caídas (-15%).
+    Cuenta cuántos días de volumen alto (>30% sobre media) con cierres bajistas o estancados 
+    se concentran en las últimas 12 sesiones.
+    """
+    frame = _aligned_market_data(close, volume)
+    if len(frame) < lookback + 50:
+        return 0
+
+    recent = frame.iloc[-(lookback + 1):]
+    vol_ma50 = frame["volume"].rolling(50).mean().iloc[-(lookback + 1):]
+    
+    returns = recent["close"].pct_change()
+    rel_vol = recent["volume"] / vol_ma50
+
+    early_dist_days = int(((returns <= -0.003) & (rel_vol > 1.3)).sum())
+    return early_dist_days
 
 
 def calc_dry_metrics(close, volume, rs_rank, above_ma50):
-    """Métrica mejorada de volumen seco y compresión de volatilidad."""
     cfg = STRATEGY_CONFIG
     frame = _aligned_market_data(close, volume)
     if len(frame) < 60:
@@ -282,7 +300,6 @@ def calc_dry_metrics(close, volume, rs_rank, above_ma50):
     recent_rel = rel_volume.iloc[-lookback:]
     recent_move = abs_returns.iloc[-lookback:]
     
-    # Días estrictos donde el volumen está seco y el precio está estrecho (VCP / pausa sana)
     dry_days = int(((recent_rel < cfg["dry_vol_threshold"]) & (recent_move < cfg["dry_move_threshold"])).sum())
 
     vol_ratio = float(v.iloc[-10:].mean() / v.iloc[-50:].mean())
@@ -299,7 +316,6 @@ def calc_dry_metrics(close, volume, rs_rank, above_ma50):
     range_score = np.clip((1.0 - range_ratio) / 0.75, 0.0, 1.0) * 100.0
     score = 0.50 * volume_score + 0.30 * volatility_score + 0.20 * range_score
 
-    # Penalización contextual para evitar falsos positivos en valores débiles
     if rs_rank < 50:
         score *= 0.75
     if not above_ma50:
@@ -328,48 +344,68 @@ def calc_selling_climax(close, volume):
 
 
 def calc_vcp_score(close, volume):
+    """
+    VCP basado en 3 contracciones sucesivas reales (legs) en los últimos 75 días.
+    Mide si la volatilidad, los rangos de precio y el volumen se reducen progresivamente.
+    """
     frame = _aligned_market_data(close, volume)
-    if len(frame) < 80:
+    if len(frame) < 75:
         return 0.0
 
     c = frame["close"]
     v = frame["volume"]
     returns = c.pct_change()
 
-    recent_volatility = float(returns.iloc[-20:].std())
-    prior_volatility = float(returns.iloc[-60:-20].std())
-    volatility_ratio = recent_volatility / prior_volatility if prior_volatility > 0 else 1.0
+    leg1_ret = returns.iloc[-75:-50]
+    leg2_ret = returns.iloc[-50:-25]
+    leg3_ret = returns.iloc[-25:]
 
-    recent_range = float(c.iloc[-20:].max() / c.iloc[-20:].min() - 1.0)
-    prior_range = float(c.iloc[-60:-20].max() / c.iloc[-60:-20].min() - 1.0)
-    range_ratio = recent_range / prior_range if prior_range > 0 else 1.0
+    leg1_vol = v.iloc[-75:-50].mean()
+    leg2_vol = v.iloc[-50:-25].mean()
+    leg3_vol = v.iloc[-25:].mean()
 
-    volume_ratio = float(v.iloc[-20:].mean() / v.iloc[-60:-20].mean())
+    leg1_range = float(c.iloc[-75:-50].max() / c.iloc[-75:-50].min() - 1.0)
+    leg2_range = float(c.iloc[-50:-25].max() / c.iloc[-50:-25].min() - 1.0)
+    leg3_range = float(c.iloc[-25:].max() / c.iloc[-25:].min() - 1.0)
 
-    volatility_score = np.clip((1.0 - volatility_ratio) / 0.60, 0.0, 1.0) * 100.0
-    range_score = np.clip((1.0 - range_ratio) / 0.60, 0.0, 1.0) * 100.0
-    volume_score = np.clip((1.0 - volume_ratio) / 0.50, 0.0, 1.0) * 100.0
+    std1 = float(leg1_ret.std())
+    std2 = float(leg2_ret.std())
+    std3 = float(leg3_ret.std())
+
+    vol_contracting_steps = 0
+    if std3 < std2: vol_contracting_steps += 1
+    if std2 < std1: vol_contracting_steps += 1
+    volatility_score = (vol_contracting_steps / 2.0) * 100.0
+
+    range_contracting_steps = 0
+    if leg3_range < leg2_range: range_contracting_steps += 1
+    if leg2_range < leg1_range: range_contracting_steps += 1
+    range_score = (range_contracting_steps / 2.0) * 100.0
+
+    vol_contracting_steps_v = 0
+    if leg3_vol < leg2_vol: vol_contracting_steps_v += 1
+    if leg2_vol < leg1_vol: vol_contracting_steps_v += 1
+    volume_score = (vol_contracting_steps_v / 2.0) * 100.0
 
     score = 0.40 * volatility_score + 0.35 * range_score + 0.25 * volume_score
     return round(float(np.clip(score, 0.0, 100.0)), 1)
 
 
 def classify_signal(last, ma50, ma200, rs_rank, dry_score, vcp_score,
-                    distribution20, accumulation20, selling_climax):
+                    early_dist, accumulation20, selling_climax):
     cfg = STRATEGY_CONFIG
     below_ma50 = not math.isnan(ma50) and last < ma50
     below_ma200 = not math.isnan(ma200) and last < ma200
     above_ma50 = not math.isnan(ma50) and last > ma50
 
-    if distribution20 >= 7 and rs_rank < 50 and below_ma50:
-        return "BREAKDOWN"
-    if distribution20 >= 5 and distribution20 >= accumulation20 + 2:
+    # Si acumula 3 o más días de distribución temprana, avisa inmediatamente
+    if early_dist >= 3:
         return "DISTRIBUTION"
-    if above_ma50 and rs_rank >= cfg["min_rs_rating"] and dry_score >= 55 and vcp_score >= 50 and distribution20 <= 3:
+    if above_ma50 and rs_rank >= cfg["min_rs_rating"] and dry_score >= 55 and vcp_score >= 50 and early_dist <= 1:
         return "VCP"
-    if selling_climax and dry_score >= 35 and distribution20 <= 4 and not below_ma200:
+    if selling_climax and dry_score >= 35 and early_dist <= 2 and not below_ma200:
         return "PULLBACK"
-    if accumulation20 >= 5 and accumulation20 >= distribution20 + 2:
+    if accumulation20 >= 5:
         return "ACCUMULATION"
     return "NEUTRAL"
 
@@ -433,7 +469,8 @@ def compute(closes, vols, universe):
             R = int(rs.get(c, 1))
             above_ma50 = (not math.isnan(ma50)) and last > ma50
 
-            distribution20, accumulation20 = 0, 0
+            early_dist = 0
+            accumulation20 = 0
             dry_days = 0
             dry_score = 0.0
             vcp_score = 0.0
@@ -441,10 +478,9 @@ def compute(closes, vols, universe):
             selling_climax_date = None
 
             if v is not None:
-                distribution20, accumulation20 = calc_flow_days(s, v)
-                dry_days, dry_score = calc_dry_metrics(
-                    s, v, rs_rank=R, above_ma50=above_ma50
-                )
+                early_dist = calc_early_distribution(s, v, lookback=12)
+                accumulation20 = calc_accumulation_days(s, v)
+                dry_days, dry_score = calc_dry_metrics(s, v, rs_rank=R, above_ma50=above_ma50)
                 vcp_score = calc_vcp_score(s, v)
                 selling_climax, selling_climax_date = calc_selling_climax(s, v)
 
@@ -455,12 +491,12 @@ def compute(closes, vols, universe):
                 rs_rank=R,
                 dry_score=dry_score,
                 vcp_score=vcp_score,
-                distribution20=distribution20,
+                early_dist=early_dist,
                 accumulation20=accumulation20,
                 selling_climax=selling_climax,
             )
 
-            flow_balance = accumulation20 - distribution20
+            flow_balance = accumulation20 - early_dist
             institutional_score = (
                 0.30 * dry_score
                 + 0.25 * vcp_score
@@ -494,8 +530,8 @@ def compute(closes, vols, universe):
                 "px": round(last, 2), "chg": round(chg, 2),
                 "rv": round(rv, 2) if not math.isnan(rv) else 1.0,
                 "dryDays10": int(dry_days),
-                "heavyDays10": int(distribution20),
-                "distribution20": int(distribution20),
+                "heavyDays10": int(early_dist),        # Mapeado a la alerta temprana para pintar las gotas rojas a tiempo
+                "distribution20": int(early_dist),
                 "accumulation20": int(accumulation20),
                 "flowBalance20": int(flow_balance),
                 "dryScore": dry_score,
