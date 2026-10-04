@@ -265,13 +265,18 @@ def calc_accumulation_days(close, volume):
 
 def calc_early_distribution(close, volume, lookback=12):
     """
-    ALERTA TEMPRANA DE DISTRIBUCIÓN: 
-    Detecta presión vendedora institucional antes de que el valor sufra grandes caídas (-15%).
-    Cuenta cuántos días de volumen alto (>30% sobre media) con cierres bajistas o estancados 
-    se concentran en las últimas 12 sesiones.
+    ALERTA DE DISTRIBUCIÓN INSTITUCIONAL REFINADA:
+    Exige caída diaria <= -0.8% con volumen alto (>30% sobre MA50).
+    Si la última sesión es un rebote alcista fuerte (> +1.5%), resetea las alertas.
     """
     frame = _aligned_market_data(close, volume)
     if len(frame) < lookback + 50:
+        return 0
+
+    returns_series = close.pct_change()
+    
+    # Anulación por rebote alcista reciente
+    if len(returns_series) > 0 and returns_series.iloc[-1] > 0.015:
         return 0
 
     recent = frame.iloc[-(lookback + 1):]
@@ -280,11 +285,16 @@ def calc_early_distribution(close, volume, lookback=12):
     returns = recent["close"].pct_change()
     rel_vol = recent["volume"] / vol_ma50
 
-    early_dist_days = int(((returns <= -0.003) & (rel_vol > 1.3)).sum())
+    # Caída mínima relevante de -0.8% (-0.008) con volumen institucional
+    early_dist_days = int(((returns <= -0.008) & (rel_vol > 1.3)).sum())
     return early_dist_days
 
 
 def calc_dry_metrics(close, volume, rs_rank, above_ma50):
+    """
+    VOLUMEN SECO ESTÁNDAR VCP:
+    Volumen < 55% de la media de 50 sesiones y movimiento < 1.2%.
+    """
     cfg = STRATEGY_CONFIG
     frame = _aligned_market_data(close, volume)
     if len(frame) < 60:
@@ -300,7 +310,7 @@ def calc_dry_metrics(close, volume, rs_rank, above_ma50):
     recent_rel = rel_volume.iloc[-lookback:]
     recent_move = abs_returns.iloc[-lookback:]
     
-    dry_days = int(((recent_rel < cfg["dry_vol_threshold"]) & (recent_move < cfg["dry_move_threshold"])).sum())
+    dry_days = int(((recent_rel < 0.55) & (recent_move < 0.012)).sum())
 
     vol_ratio = float(v.iloc[-10:].mean() / v.iloc[-50:].mean())
     ret10 = c.pct_change().iloc[-10:]
@@ -322,7 +332,6 @@ def calc_dry_metrics(close, volume, rs_rank, above_ma50):
         score *= 0.80
 
     return dry_days, round(float(np.clip(score, 0.0, 100.0)), 1)
-
 
 def calc_selling_climax(close, volume):
     cfg = STRATEGY_CONFIG
