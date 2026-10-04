@@ -516,7 +516,7 @@ def compute(closes, vols, universe):
             selling_climax_date = None
 
             if v is not None:
-                early_dist = calc_early_distribution(s, v, lookback=12)
+               early_dist = calc_trend_exhaustion(s, v)
                 accumulation20 = calc_accumulation_days(s, v)
                 dry_days, dry_score = calc_dry_metrics(s, v, rs_rank=R, above_ma50=above_ma50)
                 vcp_score = calc_vcp_score(s, v)
