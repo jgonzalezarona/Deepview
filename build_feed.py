@@ -263,31 +263,60 @@ def calc_accumulation_days(close, volume):
     return accumulation
 
 
-def calc_early_distribution(close, volume, lookback=12):
+def calc_trend_exhaustion(close, volume):
     """
-    ALERTA DE DISTRIBUCIÓN INSTITUCIONAL REFINADA:
-    Exige caída diaria <= -0.8% con volumen alto (>30% sobre MA50).
-    Si la última sesión es un rebote alcista fuerte (> +1.5%), resetea las alertas.
+    SISTEMA GENERAL DE ALERTA TEMPRANA DE DISTRIBUCIÓN Y AGOTAMIENTO
+    -----------------------------------------------------------------
+    Evalúa 4 patrones institucionales sin esperar a grandes caídas acumuladas (-15%)
+    ni saltar por pequeñas pausas de consolidación (-1%).
     """
-    frame = _aligned_market_data(close, volume)
-    if len(frame) < lookback + 50:
+    if close is None or volume is None or len(close) < 60:
         return 0
 
-    returns_series = close.pct_change()
-    
-    # Anulación por rebote alcista reciente
-    if len(returns_series) > 0 and returns_series.iloc[-1] > 0.015:
-        return 0
+    c = close
+    v = volume
+    vol_ma50 = v.rolling(50).mean()
+    ema21 = c.ewm(span=21, adjust=False).mean()
+    hi52 = c.rolling(252, min_periods=60).max()
 
-    recent = frame.iloc[-(lookback + 1):]
-    vol_ma50 = frame["volume"].rolling(50).mean().iloc[-(lookback + 1):]
-    
-    returns = recent["close"].pct_change()
-    rel_vol = recent["volume"] / vol_ma50
+    rets = c.pct_change()
+    rel_vol = v / vol_ma50
 
-    # Caída mínima relevante de -0.8% (-0.008) con volumen institucional
-    early_dist_days = int(((returns <= -0.008) & (rel_vol > 1.3)).sum())
-    return early_dist_days
+    # 1. CLÚSTER DE DISTRIBUCIÓN: Días de caída >= 0.8% con Volumen > 1.25x MA50 en 15 sesiones
+    dist_days_15 = int(((rets <= -0.008) & (rel_vol > 1.25)).iloc[-15:].sum())
+
+    # 2. CHURNING / ESTANCAMIENTO: Volumen > 1.5x pero precio plano (-0.5% a +0.3%) cerca de máximos (>= 92% de 52w)
+    near_highs = (c / hi52) >= 0.92
+    stalling_days = int(((rets >= -0.005) & (rets <= 0.003) & (rel_vol > 1.5) & near_highs).iloc[-10:].sum())
+
+    # 3. AGOTAMIENTO CLIMÁTICO: Precio extendido > 18% sobre EMA21 con volumen alto (> 1.8x)
+    ext_ema21 = (c / ema21) - 1.0
+    climax_exhaustion = 1 if (ext_ema21.iloc[-1] > 0.18 and rel_vol.iloc[-1] > 1.8) else 0
+
+    # 4. PÉRDIDA DE CARÁCTER: Cierre por debajo de la EMA21 con volumen institucional (> 1.3x)
+    character_loss = 1 if (c.iloc[-1] < ema21.iloc[-1] and rel_vol.iloc[-1] > 1.3) else 0
+
+    # --- PONDERACIÓN DEL SCORE DE SALIDA ---
+    score = 0
+    if dist_days_15 >= 3:
+        score += 2
+    elif dist_days_15 == 2:
+        score += 1
+
+    if stalling_days >= 2:
+        score += 1
+
+    if climax_exhaustion:
+        score += 1
+
+    if character_loss:
+        score += 1
+
+    # ANULACIÓN POR ABSORCIÓN: Si la última sesión es un fuerte rebote alcista (> +2.0%), la distribución se neutraliza
+    if rets.iloc[-1] > 0.020:
+        score = max(0, score - 2)
+
+    return min(4, score)
 
 
 def calc_dry_metrics(close, volume, rs_rank, above_ma50):
